@@ -28,7 +28,7 @@ public class UserController {
 
     @Autowired
     private UserService userService;
-    
+
     @Autowired
     private FileStorageService fileStorageService;
 
@@ -108,7 +108,8 @@ public class UserController {
     /**
      * Update user profile with optional image upload
      * Accepts: userName, phone_number, and image (all optional)
-     * Using POST because multipart/form-data doesn't work well with PUT in Spring Boot
+     * Using POST because multipart/form-data doesn't work well with PUT in Spring
+     * Boot
      */
     @PostMapping("/info/{userId}")
     public ResponseEntity<Map<String, Object>> updateUserInfo(
@@ -116,17 +117,17 @@ public class UserController {
             @RequestParam(value = "userName", required = false) String userName,
             @RequestParam(value = "phone_number", required = false) String phoneNumber,
             @RequestParam(value = "image", required = false) MultipartFile image) {
-        
+
         Map<String, Object> response = new HashMap<>();
         String uploadedFilename = null;
-        
+
         try {
             System.out.println("=== UPDATE USER PROFILE ===");
             System.out.println("User ID: " + userId);
             System.out.println("User Name: " + userName);
             System.out.println("Phone Number: " + phoneNumber);
             System.out.println("Has Image: " + (image != null && !image.isEmpty()));
-            
+
             // Get existing user to check for old profile image
             Optional<UserDTO> existingUserOpt = userService.getUserById(userId);
             if (existingUserOpt.isEmpty()) {
@@ -134,32 +135,31 @@ public class UserController {
                 response.put("message", "User not found");
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             }
-            
+
             UserDTO existingUser = existingUserOpt.get();
             String oldImageUrl = existingUser.getProfileImage();
             String imageUrl = oldImageUrl; // Keep old image by default
-            
+
             // Upload new image if provided
             if (image != null && !image.isEmpty()) {
                 System.out.println("📤 Uploading new image: " + image.getOriginalFilename());
-                
+
                 // Store new file with "profile" type
                 uploadedFilename = fileStorageService.storeFile(image, "profile");
-                
+
                 // Generate RELATIVE URL (without localhost)
                 imageUrl = "/api/files/profile/" + uploadedFilename;
-                
+
                 System.out.println("✅ New image uploaded: " + imageUrl);
             }
-            
+
             // Update user profile
             Optional<UserDTO> updatedUserOpt = userService.updateUserInfo(
-                userId, 
-                userName, 
-                phoneNumber, 
-                imageUrl
-            );
-            
+                    userId,
+                    userName,
+                    phoneNumber,
+                    imageUrl);
+
             if (updatedUserOpt.isPresent()) {
                 // Delete old image ONLY AFTER successful update
                 if (uploadedFilename != null && oldImageUrl != null && !oldImageUrl.isEmpty()) {
@@ -173,13 +173,13 @@ public class UserController {
                         }
                     }
                 }
-                
+
                 response.put("success", true);
                 response.put("message", "Profile updated successfully");
                 response.put("user", updatedUserOpt.get());
-                
+
                 System.out.println("✅ Profile updated successfully");
-                
+
                 return ResponseEntity.ok(response);
             } else {
                 // Rollback: delete newly uploaded image if update failed
@@ -191,16 +191,16 @@ public class UserController {
                         System.err.println("⚠️ Failed to delete uploaded image: " + ex.getMessage());
                     }
                 }
-                
+
                 response.put("success", false);
                 response.put("message", "User not found");
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             }
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error updating profile: " + e.getMessage());
             e.printStackTrace();
-            
+
             // Rollback: delete newly uploaded image if error occurred
             if (uploadedFilename != null) {
                 try {
@@ -210,14 +210,14 @@ public class UserController {
                     System.err.println("⚠️ Failed to delete uploaded image: " + ex.getMessage());
                 }
             }
-            
+
             response.put("success", false);
             response.put("message", "Failed to update profile: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
         }
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/id/{id}")
     public ResponseEntity<UserDTO> getUserById(@PathVariable Long id) {
         return userService.getUserById(id)
                 .map(ResponseEntity::ok)
@@ -245,18 +245,18 @@ public class UserController {
             return ResponseEntity.notFound().build();
         }
     }
-    
+
     // Helper method to extract filename from URL
     private String extractFilenameFromUrl(String imageUrl) {
         if (imageUrl == null || imageUrl.isEmpty()) {
             return null;
         }
-        
+
         int lastSlashIndex = imageUrl.lastIndexOf('/');
         if (lastSlashIndex != -1 && lastSlashIndex < imageUrl.length() - 1) {
             return imageUrl.substring(lastSlashIndex + 1);
         }
-        
+
         return null;
     }
 }
