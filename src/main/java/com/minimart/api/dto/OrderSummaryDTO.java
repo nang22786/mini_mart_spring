@@ -11,14 +11,16 @@ public class OrderSummaryDTO {
     private LocalDateTime createdAt;
     private Integer itemCount;
     private Long addressId;
-    private LocalDateTime payDate;  // ✅ NEW!
+    private LocalDateTime payDate;
+    private Boolean notificationRead; // ✅ ADD THIS
 
     // Constructors
     public OrderSummaryDTO() {}
 
+    // ✅ UPDATE THIS CONSTRUCTOR - Add notificationRead parameter
     public OrderSummaryDTO(Long id, Long userId, String status, BigDecimal amount,
                           LocalDateTime createdAt, Integer itemCount, Long addressId,
-                          LocalDateTime payDate) {
+                          LocalDateTime payDate, Boolean notificationRead) {
         this.id = id;
         this.userId = userId;
         this.status = status;
@@ -27,9 +29,10 @@ public class OrderSummaryDTO {
         this.itemCount = itemCount;
         this.addressId = addressId;
         this.payDate = payDate;
+        this.notificationRead = notificationRead; // ✅ ADD THIS
     }
 
-    // Getters and Setters
+    // Existing Getters and Setters...
     public Long getId() {
         return id;
     }
@@ -92,5 +95,14 @@ public class OrderSummaryDTO {
 
     public void setPayDate(LocalDateTime payDate) {
         this.payDate = payDate;
+    }
+
+    // ✅ ADD THESE GETTER AND SETTER
+    public Boolean getNotificationRead() {
+        return notificationRead;
+    }
+
+    public void setNotificationRead(Boolean notificationRead) {
+        this.notificationRead = notificationRead;
     }
 }

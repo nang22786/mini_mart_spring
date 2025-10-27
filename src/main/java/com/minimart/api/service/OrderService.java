@@ -1,5 +1,6 @@
 package com.minimart.api.service;
 
+import com.minimart.api.dto.bakong.BakongTransactionResponse;
 import com.minimart.api.model.Order;
 import com.minimart.api.model.OrderDetail;
 import com.minimart.api.model.Payment;
@@ -15,23 +16,24 @@ import com.minimart.api.dto.OrderSummaryDTO;
 import com.minimart.api.dto.PaymentDTO;
 import com.minimart.api.dto.OrderDetailDTO;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
-import java.util.ArrayList;
-import com.minimart.api.dto.PendingOrderDTO;
-import com.minimart.api.repository.UserRepository;
-import com.minimart.api.model.User;
-import org.springframework.web.multipart.MultipartFile;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.io.File;
-import java.io.IOException;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+
 @Service
 public class OrderService {
     
@@ -51,306 +53,400 @@ public class OrderService {
     private StockRepository stockRepository;
     
     @Autowired
-    private UserRepository userRepository;
+    private EmailService emailService;
     
-	/**
-	 * Create order ONLY (no payment yet)
-	 * User will upload payment screenshot later
-	 */
-	@Transactional
-	public Map<String, Object> createOrder(
-	        Long userId,
-	        BigDecimal amount,
-	        List<Map<String, Object>> items,
-	        Long addressId
-	) {
-	    try {
-	        // 1. Validate stock availability
-	        for (Map<String, Object> item : items) {
-	            Integer productId = ((Number) item.get("productId")).intValue();
-	            Integer qty = (Integer) item.get("qty");
-	            
-	            Product product = productRepository.findById(productId)
-	                .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
-	            
-	            Stock stock = product.getStock();
-	            if (stock == null) {
-	                throw new RuntimeException("Stock not found for product: " + product.getName());
-	            }
-	            
-	            if (stock.getQty() < qty) {
-	                throw new RuntimeException("Insufficient stock for product: " + product.getName() 
-	                    + ". Available: " + stock.getQty() + ", Requested: " + qty);
-	            }
-	        }
-	        
-	        // 2. Create Order ONLY (no payment yet!)
-	        Order order = new Order();
-	        order.setUserId(userId);
-	        order.setAmount(amount);
-	        order.setStatus("pending");
-	        order.setAddressId(addressId);
-	        order = orderRepository.save(order);
-	        
-	        // 3. Create Order Details
-	        for (Map<String, Object> item : items) {
-	            Integer productId = ((Number) item.get("productId")).intValue();
-	            Integer qty = (Integer) item.get("qty");
-	            BigDecimal price = new BigDecimal(item.get("price").toString());
-	            
-	            OrderDetail orderDetail = new OrderDetail();
-	            orderDetail.setProductId(productId);
-	            orderDetail.setQty(qty);
-	            orderDetail.setPrice(price);
-	            orderDetail.setOrder(order);
-	            
-	            orderDetailRepository.save(orderDetail);
-	        }
-	        
-	        // 4. Return response
-	        Map<String, Object> response = new HashMap<>();
-	        response.put("success", true);
-	        response.put("message", "Order created successfully. Please upload payment screenshot.");
-	        response.put("orderId", order.getId());
-	        response.put("status", "pending");
-	        response.put("amount", order.getAmount());
-	        response.put("addressId", order.getAddressId());
-	        
-	        return response;
-	        
-	    } catch (Exception e) {
-	        Map<String, Object> response = new HashMap<>();
-	        response.put("success", false);
-	        response.put("message", "Error creating order: " + e.getMessage());
-	        return response;
-	    }
-	}
+    @Autowired
+    private TelegramNotificationService telegramService;
+    
+    @Autowired
+    private BakongKHQRService bakongKHQRService;
+
+    @Value("${bakong.api.base-url}")
+    private String bakongApiBaseUrl;
+
+    @Value("${bakong.api.token}")
+    private String bakongApiToken;
+
+    // ============================================================
+    // 🆕 NEW: CHECKOUT WITH KHQR (Order Before Payment Flow)
+    // ============================================================
     
     /**
-     * Confirm payment (Admin verifies payment in bank account)
-     * Changes order status from "pending" to "paid" and deducts stock
+     * 🆕 CHECKOUT: Create Order (pending) + Generate KHQR
+     * POST /api/orders/checkout
      */
     @Transactional
-    public Map<String, Object> confirmPayment(Long orderId) {
+    public Map<String, Object> checkout(
+            Long userId,
+            BigDecimal amount,
+            List<Map<String, Object>> items,
+            Long addressId
+    ) {
+        Map<String, Object> response = new HashMap<>();
+
         try {
-            Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
-            
-            if (!"pending".equals(order.getStatus())) {
-                throw new RuntimeException("Order is not pending. Current status: " + order.getStatus());
+            // 🔒 SAFETY #3: Prevent duplicate pending orders
+            List<Order> pendingOrders = orderRepository.findByUserIdAndStatus(userId, "pending");
+            if (!pendingOrders.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "You already have a pending order. Please complete or wait for it to expire.");
+                response.put("pendingOrderId", pendingOrders.get(0).getId());
+                return response;
             }
-            
-            Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new RuntimeException("Payment not found"));
-            
-            payment.setStatus("paid");
-            payment.setPayDate(LocalDateTime.now());
-            paymentRepository.save(payment);
-            
-            order.setStatus("paid");
-            orderRepository.save(order);
-            
-            List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
-            
-            for (OrderDetail detail : orderDetails) {
-                Integer productId = detail.getProductId();
-                
+
+            // 1. Validate stock availability (but DON'T deduct yet!)
+            for (Map<String, Object> item : items) {
+                Integer productId = ((Number) item.get("productId")).intValue();
+                Integer qty = (Integer) item.get("qty");
+
                 Product product = productRepository.findById(productId)
-                    .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
-                
+                        .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
+
                 Stock stock = product.getStock();
                 if (stock == null) {
                     throw new RuntimeException("Stock not found for product: " + product.getName());
                 }
-                
-                int newQty = stock.getQty() - detail.getQty();
-                if (newQty < 0) {
-                    throw new RuntimeException("Insufficient stock for product: " + product.getName());
+
+                if (stock.getQty() < qty) {
+                    throw new RuntimeException("Insufficient stock for product: " + product.getName()
+                            + ". Available: " + stock.getQty() + ", Requested: " + qty);
                 }
-                
-                stock.setQty(newQty);
-                stockRepository.save(stock);
             }
-            
-            Map<String, Object> response = new HashMap<>();
+
+            // 2. Create Order with status "pending"
+            Order order = new Order();
+            order.setUserId(userId);
+            order.setAmount(amount);
+            order.setStatus("pending");
+            order.setAddressId(addressId);
+            order = orderRepository.save(order);
+
+            System.out.println("✅ Order created - Order #" + order.getId() + " (status: pending)");
+
+            // 3. Create Order Details
+            for (Map<String, Object> item : items) {
+                Integer productId = ((Number) item.get("productId")).intValue();
+                Integer qty = (Integer) item.get("qty");
+                BigDecimal price = new BigDecimal(item.get("price").toString());
+
+                OrderDetail orderDetail = new OrderDetail();
+                orderDetail.setProductId(productId);
+                orderDetail.setQty(qty);
+                orderDetail.setPrice(price);
+                orderDetail.setOrder(order);
+
+                orderDetailRepository.save(orderDetail);
+            }
+
+            // 4. Generate KHQR
+            String billNumber = "ORDER-" + order.getId();
+            BakongKHQRService.KHQRGenerationResult khqrResult =
+                    bakongKHQRService.generateKHQR(billNumber, amount);
+
+            if (!khqrResult.isSuccess()) {
+                response.put("success", false);
+                response.put("message", "Order created but KHQR generation failed: " + khqrResult.getError());
+                response.put("orderId", order.getId());
+                return response;
+            }
+
+            System.out.println("✅ KHQR generated - MD5: " + khqrResult.getMd5());
+
+            // 5. Create Payment record with KHQR details
+            Payment payment = new Payment();
+            payment.setOrderId(order.getId());
+            payment.setUserId(userId);
+            payment.setAmount(amount);
+            payment.setCurrency("USD");
+            payment.setPaymentMethod("KHQR");
+            payment.setStatus("pending");
+            payment.setKhqrMd5(khqrResult.getMd5());
+            payment.setKhqrQr(khqrResult.getQrCode());
+            payment.setExpiresAt(LocalDateTime.now().plusMinutes(1));
+            payment.setCreatedAt(LocalDateTime.now());
+            payment = paymentRepository.save(payment);
+
+            System.out.println("✅ Payment record created - Payment #" + payment.getId());
+            System.out.println("   Expires at: " + payment.getExpiresAt());
+
+            // 6. Start background monitoring
+            startPaymentMonitoring(payment.getId(), order.getId());
+
+            // 🔒 NO notifications here! Only when status = "paid"
+            System.out.println("⏳ Waiting for payment... Notifications will be sent when order is paid.");
+
+            // 7. Return response to Flutter
             response.put("success", true);
-            response.put("message", "Payment confirmed and stock deducted successfully");
+            response.put("message", "Order created successfully. Please scan QR code to pay.");
             response.put("orderId", order.getId());
-            response.put("status", "paid");
-            
+            response.put("paymentId", payment.getId());
+            response.put("qrCode", khqrResult.getQrCode());
+            response.put("amount", amount);
+            response.put("status", "pending");
+            response.put("expiresAt", payment.getExpiresAt().toString());
+
             return response;
-            
+
         } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
             response.put("success", false);
-            response.put("message", "Error confirming payment: " + e.getMessage());
+            response.put("message", "Error during checkout: " + e.getMessage());
+            e.printStackTrace();
             return response;
         }
     }
-    
+
     /**
-     * Reject payment (Admin marks payment as failed)
-     * Changes order status from "pending" to "failed"
-     * Stock is NOT deducted
+     * Start background payment monitoring
+     */
+    private void startPaymentMonitoring(Long paymentId, Long orderId) {
+        CompletableFuture.runAsync(() -> {
+            monitorPaymentStatus(paymentId, orderId);
+        });
+    }
+
+    /**
+     * Monitor payment status by checking Bakong API every 10 seconds for 5 minutes
+     */
+    private void monitorPaymentStatus(Long paymentId, Long orderId) {
+        try {
+            System.out.println("🔍 Starting payment monitoring - Payment #" + paymentId);
+
+            // Check every 10 seconds for 5 minutes (30 checks)
+            for (int i = 0; i < 30; i++) {
+                Thread.sleep(10000); // Wait 10 seconds
+
+                Payment payment = paymentRepository.findById(paymentId).orElse(null);
+                if (payment == null) {
+                    System.err.println("❌ Payment not found: " + paymentId);
+                    return;
+                }
+
+                // If already paid or failed, stop monitoring
+                if ("paid".equals(payment.getStatus()) || "failed".equals(payment.getStatus())) {
+                    System.out.println("⏹️ Monitoring stopped - Payment #" + paymentId + " status: " + payment.getStatus());
+                    return;
+                }
+
+                // Check if expired
+                if (LocalDateTime.now().isAfter(payment.getExpiresAt())) {
+                    System.out.println("⏱️ Payment expired - Payment #" + paymentId);
+                    updateOrderToFailed(orderId, paymentId);
+                    return;
+                }
+
+                // Check payment status with Bakong API
+                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/30)");
+
+                boolean isPaid = checkBakongPayment(payment);
+
+                if (isPaid) {
+                    System.out.println("✅ Payment confirmed by Bakong! - Payment #" + paymentId);
+                    updateOrderToPaid(orderId, paymentId);
+                    return;
+                }
+            }
+
+            // If we reach here, payment timed out
+            System.out.println("⏱️ Payment monitoring timeout (1 min) - Payment #" + paymentId);
+            updateOrderToFailed(orderId, paymentId);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error monitoring payment: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Check Bakong API for payment confirmation
+     */
+    private boolean checkBakongPayment(Payment payment) {
+        try {
+            String url = bakongApiBaseUrl + "/v1/check_transaction_by_md5";
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + bakongApiToken);
+            headers.set("Content-Type", "application/json");
+
+            Map<String, String> body = new HashMap<>();
+            body.put("md5", payment.getKhqrMd5());
+
+            HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<BakongTransactionResponse> responseEntity =
+                    restTemplate.exchange(url, HttpMethod.POST, request, BakongTransactionResponse.class);
+
+            BakongTransactionResponse bakongResponse = responseEntity.getBody();
+
+            if (bakongResponse != null && bakongResponse.isPaid()) {
+                BigDecimal paidAmount = bakongResponse.getData().getAmount();
+
+                // Verify amount matches
+                if (paidAmount.compareTo(payment.getAmount()) == 0) {
+                    // Save transaction ID
+                    payment.setTransactionId(bakongResponse.getData().getHash());
+                    paymentRepository.save(payment);
+                    return true;
+                } else {
+                    System.err.println("❌ Amount mismatch - Expected: " + payment.getAmount() + ", Got: " + paidAmount);
+                    return false;
+                }
+            }
+
+            return false;
+
+        } catch (Exception e) {
+            System.err.println("❌ Bakong API error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 🔒 SAFETY #2: Update order to PAID and deduct stock
      */
     @Transactional
-    public Map<String, Object> rejectPayment(Long orderId, String reason) {
+    public void updateOrderToPaid(Long orderId, Long paymentId) {
         try {
-            Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
-            
-            if (!"pending".equals(order.getStatus())) {
-                throw new RuntimeException("Order is not pending. Current status: " + order.getStatus());
+            Order order = orderRepository.findById(orderId).orElse(null);
+            Payment payment = paymentRepository.findById(paymentId).orElse(null);
+
+            if (order == null || payment == null) {
+                System.err.println("❌ Order or Payment not found");
+                return;
             }
-            
-            Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new RuntimeException("Payment not found"));
-            
+
+            // Update payment status
+            payment.setStatus("paid");
+            payment.setPayDate(LocalDateTime.now());
+            paymentRepository.save(payment);
+
+            // Update order status
+            order.setStatus("paid");
+            order.setUpdatedAt(LocalDateTime.now());
+            orderRepository.save(order);
+
+            System.out.println("✅ Order #" + orderId + " status updated to PAID");
+
+            // 🔒 Deduct stock ONLY when status = "paid"
+            List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
+
+            for (OrderDetail detail : orderDetails) {
+                Integer productId = detail.getProductId();
+                Product product = productRepository.findById(productId).orElse(null);
+
+                if (product != null && product.getStock() != null) {
+                    Stock stock = product.getStock();
+                    int newQty = stock.getQty() - detail.getQty();
+                    stock.setQty(Math.max(newQty, 0)); // Prevent negative stock
+                    stockRepository.save(stock);
+
+                    System.out.println("✅ Stock deducted - Product #" + productId + " - New qty: " + newQty);
+                }
+            }
+
+            System.out.println("🎉 Payment successful! Order #" + orderId + " completed.");
+
+            // 🆕 SEND NOTIFICATIONS (ONLY when status = "paid")
+            try {
+                // 1. Send to ORDER BOT (Telegram - owner)
+                telegramService.sendOrderSuccessNotification(order);
+                System.out.println("✅ Order notification sent to Telegram (owner)");
+                
+                // 2. Send to PAYMENT BOT (Telegram - owner)
+                telegramService.sendPaymentNotification(order, payment);
+                System.out.println("✅ Payment notification sent to Payment Bot (owner)");
+                
+                // 3. Send email to customer
+                emailService.sendOrderSuccessEmail(order);
+                System.out.println("✅ Order email sent to customer");
+                
+            } catch (Exception e) {
+                System.err.println("⚠️ Failed to send notifications: " + e.getMessage());
+                // Don't fail the whole transaction if notification fails
+            }
+
+        } catch (Exception e) {
+            System.err.println("❌ Error updating order to paid: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Update order to FAILED (timeout)
+     */
+    @Transactional
+    public void updateOrderToFailed(Long orderId, Long paymentId) {
+        try {
+            Order order = orderRepository.findById(orderId).orElse(null);
+            Payment payment = paymentRepository.findById(paymentId).orElse(null);
+
+            if (order == null || payment == null) {
+                System.err.println("❌ Order or Payment not found");
+                return;
+            }
+
+            // Update payment status
             payment.setStatus("failed");
             paymentRepository.save(payment);
-            
+
+            // Update order status
             order.setStatus("failed");
             orderRepository.save(order);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "Payment rejected: " + (reason != null ? reason : "Invalid payment"));
-            response.put("orderId", order.getId());
-            response.put("status", "failed");
-            
-            return response;
-            
+
+            System.out.println("❌ Order #" + orderId + " status updated to FAILED (timeout)");
+
         } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Error rejecting payment: " + e.getMessage());
-            return response;
+            System.err.println("❌ Error updating order to failed: " + e.getMessage());
+            e.printStackTrace();
         }
     }
-    
+
     /**
-     * Update payment status from payment gateway callback
-     * This is called automatically when Bakong/payment gateway confirms payment
+     * 🔒 SAFETY #1: Cleanup old failed orders
      */
     @Transactional
-    public Map<String, Object> updatePaymentStatus(
-            Long orderId, 
-            String paymentStatus, 
-            String transactionRef
-    ) {
+    public Map<String, Object> cleanupFailedOrders() {
         try {
-            Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+            LocalDateTime cutoffDate = LocalDateTime.now().minusDays(7);
             
-            Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new RuntimeException("Payment not found"));
+            List<Order> failedOrders = orderRepository.findByStatusAndCreatedAtBefore("failed", cutoffDate);
             
-            // Only update if order is still pending
-            if (!"pending".equals(order.getStatus())) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", false);
-                response.put("message", "Order is not pending. Current status: " + order.getStatus());
-                return response;
-            }
-            
-            // Handle payment success
-            if ("success".equalsIgnoreCase(paymentStatus) || "paid".equalsIgnoreCase(paymentStatus)) {
-                payment.setStatus("paid");
-                payment.setPayDate(LocalDateTime.now());
-                paymentRepository.save(payment);
-                
-                order.setStatus("paid");
-                orderRepository.save(order);
-                
-                // Deduct stock
+            int deletedCount = 0;
+            for (Order order : failedOrders) {
+                // Delete order details first
                 List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
-                for (OrderDetail detail : orderDetails) {
-                    Integer productId = detail.getProductId();
-                    Product product = productRepository.findById(productId)
-                        .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
-                    
-                    Stock stock = product.getStock();
-                    if (stock == null) {
-                        throw new RuntimeException("Stock not found for product: " + product.getName());
-                    }
-                    
-                    int newQty = stock.getQty() - detail.getQty();
-                    if (newQty < 0) {
-                        throw new RuntimeException("Insufficient stock for product: " + product.getName());
-                    }
-                    
-                    stock.setQty(newQty);
-                    stockRepository.save(stock);
-                }
+                orderDetailRepository.deleteAll(orderDetails);
                 
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", true);
-                response.put("message", "Payment confirmed automatically");
-                response.put("orderId", order.getId());
-                response.put("status", "paid");
-                response.put("transactionRef", transactionRef);
-                return response;
+                // Delete payment records
+                paymentRepository.findByOrderId(order.getId()).ifPresent(payment -> {
+                    paymentRepository.delete(payment);
+                });
+                
+                // Delete order
+                orderRepository.delete(order);
+                deletedCount++;
             }
             
-            // Handle payment failure
-            if ("failed".equalsIgnoreCase(paymentStatus) || "rejected".equalsIgnoreCase(paymentStatus)) {
-                payment.setStatus("failed");
-                paymentRepository.save(payment);
-                
-                order.setStatus("failed");
-                orderRepository.save(order);
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", true);
-                response.put("message", "Payment failed");
-                response.put("orderId", order.getId());
-                response.put("status", "failed");
-                return response;
-            }
+            System.out.println("🗑️ Cleaned up " + deletedCount + " failed orders older than 7 days");
             
-            // Unknown status
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Unknown payment status: " + paymentStatus);
-            return response;
+            return Map.of(
+                "success", true,
+                "deletedCount", deletedCount,
+                "message", "Cleaned up " + deletedCount + " failed orders"
+            );
             
         } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Error updating payment status: " + e.getMessage());
-            return response;
+            System.err.println("❌ Error cleaning up failed orders: " + e.getMessage());
+            return Map.of(
+                "success", false,
+                "message", "Error: " + e.getMessage()
+            );
         }
     }
-    
-    /**
-     * Check payment status (for polling from Flutter app)
-     */
-    public Map<String, Object> checkPaymentStatus(Long orderId) {
-        try {
-            Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
-            
-            Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new RuntimeException("Payment not found"));
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("orderId", order.getId());
-            response.put("orderStatus", order.getStatus());
-            response.put("paymentStatus", payment.getStatus());
-            response.put("amount", order.getAmount());
-            response.put("paymentMethod", payment.getPaymentMethod());
-            response.put("createdAt", order.getCreatedAt());
-            
-            return response;
-            
-        } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", e.getMessage());
-            return response;
-        }
-    }
+
+    // ============================================================
+    // 📊 VIEW METHODS (For Customer & Admin)
+    // ============================================================
     
     /**
      * Get all orders for a user
@@ -360,7 +456,7 @@ public class OrderService {
     }
     
     /**
-     * Get user orders as summary (lightweight for list view)
+     * Get user orders as summary (for My Orders)
      */
     public List<OrderSummaryDTO> getUserOrdersSummary(Long userId) {
         List<Order> orders = orderRepository.findByUserIdOrderByCreatedAtDesc(userId);
@@ -378,7 +474,8 @@ public class OrderService {
                 order.getCreatedAt(),
                 itemCount,
                 order.getAddressId(),
-                payDate
+                payDate,
+                order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
             ));
         }
         
@@ -386,7 +483,7 @@ public class OrderService {
     }
     
     /**
-     * Get order by ID with details
+     * Get order by ID
      */
     public Order getOrderById(Long orderId) {
         return orderRepository.findById(orderId)
@@ -394,376 +491,426 @@ public class OrderService {
     }
     
     /**
-     * Get order details with product info (for single order view)
+     * Get order details with items and payment (for single order view)
      */
     public OrderDTO getOrderDetails(Long orderId) {
-    Order order = orderRepository.findById(orderId)
-        .orElseThrow(() -> new RuntimeException("Order not found"));
-    
-    OrderDTO dto = new OrderDTO(
-        order.getId(),
-        order.getStatus(),
-        order.getAmount(),
-        order.getCreatedAt(),
-        order.getUpdatedAt(),
-        order.getUserId(),
-        order.getAddressId()
-    );
-    
-    // Get order items
-    List<OrderDetail> details = orderDetailRepository.findByOrder(order);
-    List<OrderDetailDTO> itemDTOs = new ArrayList<>();
-    
-    for (OrderDetail detail : details) {
-        Product product = productRepository.findById(detail.getProductId()).orElse(null);
+        Order order = orderRepository.findById(orderId)
+            .orElseThrow(() -> new RuntimeException("Order not found"));
         
-        OrderDetailDTO itemDTO = new OrderDetailDTO(
-            detail.getId(),
-            detail.getProductId(),
-            product != null ? product.getName() : "Unknown Product",
-            product != null ? product.getImage() : null,
-            detail.getQty(),
-            detail.getPrice()
+        OrderDTO dto = new OrderDTO(
+            order.getId(),
+            order.getStatus(),
+            order.getAmount(),
+            order.getCreatedAt(),
+            order.getUpdatedAt(),
+            order.getUserId(),
+            order.getAddressId(),
+            order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
         );
-        itemDTOs.add(itemDTO);
-    }
-    
-    dto.setItems(itemDTOs);
-    
-    // ✅ Get payment info
-    Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
-    if (payment != null) {
-        dto.setPayment(convertToPaymentDTO(payment));
-    }
-    
-    return dto;
-}
-
-    
-    /**
-     * Get all pending orders (for admin)
-     */
-    public List<Order> getPendingOrders() {
-        return orderRepository.findByStatus("pending");
-    }
-    
-    /**
-     * Cancel order (only if still pending)
-     */
-    @Transactional
-    public Map<String, Object> cancelOrder(Long orderId) {
-        try {
-            Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+        
+        // Get order items
+        List<OrderDetail> details = orderDetailRepository.findByOrder(order);
+        List<OrderDetailDTO> itemDTOs = new ArrayList<>();
+        
+        for (OrderDetail detail : details) {
+            Product product = productRepository.findById(detail.getProductId()).orElse(null);
             
-            if (!"pending".equals(order.getStatus())) {
-                throw new RuntimeException("Cannot cancel order. Current status: " + order.getStatus());
-            }
-            
-            order.setStatus("failed");
-            orderRepository.save(order);
-            
-            Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
-            if (payment != null) {
-                payment.setStatus("failed");
-                paymentRepository.save(payment);
-            }
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "Order cancelled successfully");
-            return response;
-            
-        } catch (Exception e) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", e.getMessage());
-            return response;
+            OrderDetailDTO itemDTO = new OrderDetailDTO(
+                detail.getId(),
+                detail.getProductId(),
+                product != null ? product.getName() : "Unknown Product",
+                product != null ? product.getImage() : null,
+                detail.getQty(),
+                detail.getPrice()
+            );
+            itemDTOs.add(itemDTO);
         }
+        
+        dto.setItems(itemDTOs);
+        
+        // Get payment info
+        Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
+        if (payment != null) {
+            dto.setPayment(convertToPaymentDTO(payment));
+        }
+        
+        return dto;
     }
+
     /**
-     * Get pending orders with minimal data (for admin dashboard)
+     * Get all orders summary (for admin dashboard)
      */
-    public List<PendingOrderDTO> getPendingOrdersSummary() {
-        List<Order> orders = orderRepository.findByStatus("pending");
-        List<PendingOrderDTO> summaries = new ArrayList<>();
+    public List<OrderSummaryDTO> getAllOrdersSummary() {
+        List<Order> orders = orderRepository.findAllByOrderByCreatedAtDesc();
+        List<OrderSummaryDTO> summaries = new ArrayList<>();
         
         for (Order order : orders) {
-            // Get user info
-            User user = userRepository.findById(order.getUserId()).orElse(null);
-            String userName = user != null ? user.getUserName() : "Unknown";
-            String userEmail = user != null ? user.getEmail() : "Unknown";
-            
-            // Get payment method
-            Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
-            String paymentMethod = payment != null ? payment.getPaymentMethod() : "N/A";
-            
-            // Count items
             int itemCount = orderDetailRepository.findByOrder(order).size();
-            
-            summaries.add(new PendingOrderDTO(
+            Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
+            LocalDateTime payDate = payment != null ? payment.getPayDate() : null;
+            summaries.add(new OrderSummaryDTO(
                 order.getId(),
                 order.getUserId(),
-                userName,
-                userEmail,
+                order.getStatus(),
                 order.getAmount(),
-                paymentMethod,
                 order.getCreatedAt(),
-                itemCount
+                itemCount,
+                order.getAddressId(),
+                payDate,
+                order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
             ));
         }
         
         return summaries;
     }
-    @Autowired
-    private OCRService ocrService;
-
-    @Autowired
-    private FileStorageService fileStorageService;
 
     /**
-     * Upload payment screenshot and verify automatically
-     * This is where Payment record is created!
+     * 🆕 UPDATE ORDER STATUS (Owner only)
      */
-    @Transactional
-    public Map<String, Object> uploadPaymentScreenshot(
-            Long userId,
-            Long orderId,
-            MultipartFile screenshot
-    ) {
-        String fileName = null;
-        String screenshotPath = null;
+    public Map<String, Object> updateOrderStatus(Long orderId, String newStatus) {
+        Map<String, Object> result = new HashMap<>();
         
         try {
-            // 1. Get order and verify ownership
+            // Find order
             Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+                    .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
             
-            if (!order.getUserId().equals(userId)) {
-                throw new RuntimeException("Access denied. This order doesn't belong to you.");
-            }
+            String oldStatus = order.getStatus();
             
-            // 2. Check order status
-            if (!"pending".equals(order.getStatus())) {
-                throw new RuntimeException("Order is not pending. Current status: " + order.getStatus());
-            }
-            
-            // 3. Check if payment already exists
-            Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
-            
-            // ✅ Create payment record if doesn't exist!
-            if (payment == null) {
-                payment = new Payment();
-                payment.setOrderId(orderId);
-                payment.setUserId(userId);
-                payment.setAmount(order.getAmount());
-                payment.setPaymentMethod("Bank Transfer");  // Default
-                payment.setCurrency("USD");  // Default
-                payment.setStatus("pending");
-                payment = paymentRepository.save(payment);
-            }
-            
-            // 4. Save screenshot file
-            fileName = fileStorageService.storeFile(screenshot, "payment");
-            screenshotPath = "/api/files/payments/" + fileName;
-            
-            System.out.println("✅ Screenshot uploaded: " + fileName);
-            
-            // 5. Get the actual file location
-            Path uploadPath = fileStorageService.getFileStorageLocation("payment");
-            File imageFile = uploadPath.resolve(fileName).toFile();
-            
-            System.out.println("📁 Looking for file at: " + imageFile.getAbsolutePath());
-            System.out.println("📂 File exists: " + imageFile.exists());
-            
-            // 6. Extract text from screenshot using OCR
-            String extractedText;
-            try {
-                extractedText = ocrService.extractText(imageFile);
-            } catch (IOException e) {
-                System.err.println("❌ OCR failed: " + e.getMessage());
-                fileStorageService.deleteFile(fileName, "payment");
-                System.out.println("🗑️ Deleted uploaded file due to OCR failure");
-                throw new RuntimeException("OCR failed: " + e.getMessage());
-            }
-            
-            // 7. Extract Transaction ID
-            String transactionId = ocrService.extractTransactionId(extractedText);
-            
-            if (transactionId == null || transactionId.trim().isEmpty()) {
-                fileStorageService.deleteFile(fileName, "payment");
-                System.out.println("🗑️ Deleted uploaded file - no Transaction ID found");
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", false);
-                response.put("message", "Could not find Transaction ID in screenshot. Please upload a clear payment screenshot.");
-                response.put("orderId", orderId);
-                response.put("status", "pending");
-                return response;
-            }
-            
-            System.out.println("✅ Transaction ID extracted: " + transactionId);
-            
-            // 8. Check if Transaction ID already used
-            if (paymentRepository.existsByTransactionId(transactionId)) {
-                fileStorageService.deleteFile(fileName, "payment");
-                System.out.println("❌ Duplicate transaction detected: " + transactionId);
-                System.out.println("🗑️ Deleted uploaded file - duplicate transaction");
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", false);
-                response.put("message", "This payment screenshot has already been used. Transaction ID: " + transactionId);
-                response.put("orderId", orderId);
-                response.put("status", "pending");
-                response.put("transactionId", transactionId);
-                return response;
-            }
-            
-            // 9. Extract Transaction Date
-            LocalDateTime transactionDate = ocrService.extractTransactionDate(extractedText);
-            
-            if (transactionDate != null) {
-                System.out.println("✅ Transaction Date extracted: " + transactionDate);
-            } else {
-                System.out.println("⚠️ Could not extract Transaction Date (will continue anyway)");
-            }
-            
-            // 10. Verify amount
-            boolean amountMatches = ocrService.verifyPayment(extractedText, order.getAmount());
-            
-            if (!amountMatches) {
-                System.out.println("❌ Amount verification failed - deleting file");
-                fileStorageService.deleteFile(fileName, "payment");
-                System.out.println("🗑️ Deleted uploaded file due to amount mismatch");
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", false);
-                response.put("message", "Amount in screenshot doesn't match order amount. Expected: $" + order.getAmount() + ". Please upload correct payment screenshot.");
-                response.put("orderId", orderId);
-                response.put("status", "pending");
-                response.put("transactionId", transactionId);
-                return response;
-            }
-            
-            System.out.println("✅ Amount verification successful!");
-            
-            // 11. Save transaction details & confirm payment
-            payment.setScreenshotPath(screenshotPath);
-            payment.setTransactionId(transactionId);
-            payment.setTransactionDate(transactionDate);
-            payment.setStatus("paid");
-            payment.setPayDate(LocalDateTime.now());
-            paymentRepository.save(payment);
-            
-            order.setStatus("paid");
+            // Update order status
+            order.setStatus(newStatus);
+            order.setUpdatedAt(LocalDateTime.now());
             orderRepository.save(order);
             
-            System.out.println("✅ Payment status updated to PAID");
-            
-            // 12. Deduct stock
-            List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
-            for (OrderDetail detail : orderDetails) {
-                Integer productId = detail.getProductId();
-                Product product = productRepository.findById(productId)
-                    .orElseThrow(() -> new RuntimeException("Product not found: " + productId));
-                
-                Stock stock = product.getStock();
-                if (stock == null) {
-                    throw new RuntimeException("Stock not found for product: " + product.getName());
+            // Update payment status if exists
+            Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
+            if (paymentOpt.isPresent()) {
+                Payment payment = paymentOpt.get();
+                payment.setStatus(newStatus);
+                if ("paid".equals(newStatus)) {
+                    payment.setPayDate(LocalDateTime.now());
                 }
-                
-                int newQty = stock.getQty() - detail.getQty();
-                if (newQty < 0) {
-                    throw new RuntimeException("Insufficient stock for product: " + product.getName());
-                }
-                
-                stock.setQty(newQty);
-                stockRepository.save(stock);
+                paymentRepository.save(payment);
             }
             
-            System.out.println("✅ Stock deducted successfully");
+            System.out.println("✅ Order #" + orderId + " status: " + oldStatus + " → " + newStatus);
             
-            // 13. Success!
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "Payment verified and confirmed automatically!");
-            response.put("orderId", orderId);
-            response.put("status", "paid");
-            response.put("transactionId", transactionId);
-            response.put("transactionDate", transactionDate != null ? transactionDate.toString() : "N/A");
-            response.put("extractedText", extractedText);
+            // Return simple data (convert LocalDateTime to String!)
+            Map<String, Object> orderData = new HashMap<>();
+            orderData.put("id", order.getId());
+            orderData.put("userId", order.getUserId());
+            orderData.put("status", order.getStatus());
+            orderData.put("amount", order.getAmount());
+            orderData.put("createdAt", order.getCreatedAt() != null ? order.getCreatedAt().toString() : null);
+            orderData.put("updatedAt", order.getUpdatedAt() != null ? order.getUpdatedAt().toString() : null);
+            orderData.put("addressId", order.getAddressId());
             
-            System.out.println("🎉 Payment verification successful!");
-            
-            return response;
+            result.put("success", true);
+            result.put("message", "Order #" + orderId + " status updated to " + newStatus + " successfully");
+            result.put("order", orderData);
+            return result;
             
         } catch (Exception e) {
-            // Any error - delete uploaded file if it exists!
-            if (fileName != null) {
-                try {
-                    fileStorageService.deleteFile(fileName, "payment");
-                    System.out.println("🗑️ Deleted uploaded file due to error: " + e.getMessage());
-                } catch (Exception deleteError) {
-                    System.err.println("⚠️ Failed to delete file: " + deleteError.getMessage());
+            System.err.println("❌ Error updating order status: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return result;
+        }
+    }
+    
+    /**
+     * 🆕 DELETE ORDER (Owner only)
+     */
+    public Map<String, Object> deleteOrder(Long orderId) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // Check if order exists
+            Order order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
+            
+            // Delete payment if exists
+            Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
+            if (paymentOpt.isPresent()) {
+                paymentRepository.delete(paymentOpt.get());
+                System.out.println("🗑️ Deleted payment for Order #" + orderId);
+            }
+            
+            // Delete order details (using your existing method)
+            List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
+            if (!orderDetails.isEmpty()) {
+                orderDetailRepository.deleteAll(orderDetails);
+                System.out.println("🗑️ Deleted " + orderDetails.size() + " order details for Order #" + orderId);
+            }
+            
+            // Delete order
+            orderRepository.delete(order);
+            System.out.println("🗑️ Deleted Order #" + orderId);
+            
+            result.put("success", true);
+            result.put("message", "Order #" + orderId + " and all related data deleted successfully");
+            return result;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error deleting order: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return result;
+        }
+    }
+
+    /**
+     * Convert Payment entity to PaymentDTO
+     */
+    private PaymentDTO convertToPaymentDTO(Payment payment) {
+        if (payment == null) {
+            return null;
+        }
+        
+        return new PaymentDTO(
+            payment.getId(),
+            payment.getOrderId(),
+            payment.getUserId(),
+            payment.getAmount(),
+            payment.getPaymentMethod(),
+            payment.getCurrency(),
+            payment.getTransactionId(),
+            payment.getStatus(),
+            payment.getPayDate(),
+            payment.getCreatedAt()
+        );
+    }
+ // ============================================================
+    // 🔔 NOTIFICATION METHODS
+    // ============================================================
+
+    /**
+     * Mark failed order notification as read
+     */
+    @Transactional
+    public Map<String, Object> markNotificationAsRead(Long orderId, Long userId) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // Find order
+            Order order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
+            
+            // Check if order belongs to user
+            if (!order.getUserId().equals(userId)) {
+                result.put("success", false);
+                result.put("message", "Access denied. This order doesn't belong to you.");
+                return result;
+            }
+            
+            // Mark as read
+            order.setNotificationRead(true);
+            orderRepository.save(order);
+            
+            System.out.println("✅ Order #" + orderId + " notification marked as read by User #" + userId);
+            
+            result.put("success", true);
+            result.put("message", "Notification marked as read");
+            return result;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error marking notification as read: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            return result;
+        }
+    }
+
+    /**
+     * Mark all failed order notifications as read for a user
+     */
+    @Transactional
+    public Map<String, Object> markAllFailedAsRead(Long userId) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // Find all unread failed orders for user
+            List<Order> failedOrders = orderRepository.findByUserIdAndStatus(userId, "failed");
+            
+            int markedCount = 0;
+            for (Order order : failedOrders) {
+                if (order.getNotificationRead() == null || !order.getNotificationRead()) {
+                    order.setNotificationRead(true);
+                    orderRepository.save(order);
+                    markedCount++;
                 }
             }
             
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Error processing screenshot: " + e.getMessage());
-            e.printStackTrace();
-            return response;
+            System.out.println("✅ Marked " + markedCount + " failed order notifications as read for User #" + userId);
+            
+            result.put("success", true);
+            result.put("message", "All failed order notifications marked as read");
+            result.put("markedCount", markedCount);
+            return result;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error marking all failed as read: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", e.getMessage());
+            result.put("markedCount", 0);
+            return result;
         }
     }
-	
-	/**
-	 * Get all orders summary (for admin dashboard)
-	 */
-	public List<OrderSummaryDTO> getAllOrdersSummary() {
-	    // ✅ Use the corrected method
-	    List<Order> orders = orderRepository.findAllByOrderByCreatedAtDesc();
-	    List<OrderSummaryDTO> summaries = new ArrayList<>();
-	    
-	    for (Order order : orders) {
-	        int itemCount = orderDetailRepository.findByOrder(order).size();
-	        Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
-	        LocalDateTime payDate = payment != null ? payment.getPayDate() : null;
-	        summaries.add(new OrderSummaryDTO(
-	            order.getId(),
-	            order.getUserId(),
-	            order.getStatus(),
-	            order.getAmount(),
-	            order.getCreatedAt(),
-	            itemCount,
-	            order.getAddressId(),
-	            payDate
-	        ));
-	    }
-	    
-	    return summaries;
-	}
-	
-	/**
-	 * Convert Payment entity to PaymentDTO
-	 */
-	private PaymentDTO convertToPaymentDTO(Payment payment) {
-	    if (payment == null) {
-	        return null;
-	    }
-	    
-	    return new PaymentDTO(
-	        payment.getId(),
-	        payment.getOrderId(),
-	        payment.getUserId(),
-	        payment.getAmount(),
-	        payment.getPaymentMethod(),
-	        payment.getCurrency(),
-	        payment.getScreenshotPath(),
-	        payment.getTransactionId(),
-	        payment.getTransactionDate(),
-	        payment.getStatus(),
-	        payment.getPayDate(),
-	        payment.getCreatedAt()
-	    );
-	}
+
+    /**
+     * Get count of unread failed orders for a user
+     */
+    public Integer getUnreadFailedCount(Long userId) {
+        try {
+            List<Order> failedOrders = orderRepository.findByUserIdAndStatus(userId, "failed");
+            
+            int count = 0;
+            for (Order order : failedOrders) {
+                if (order.getNotificationRead() == null || !order.getNotificationRead()) {
+                    count++;
+                }
+            }
+            
+            return count;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error getting unread failed count: " + e.getMessage());
+            return 0;
+        }
+    }
+    
+ // ============================================================
+ // 🔄 RETRY PAYMENT FOR FAILED ORDER
+ // ============================================================
+ @Transactional
+ public Map<String, Object> retryPayment(Long orderId, Long userId) {
+     Map<String, Object> result = new HashMap<>();
+     
+     try {
+         // 1. Find the order
+         Order order = orderRepository.findById(orderId)
+                 .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
+         
+         System.out.println("🔄 Found Order #" + orderId + " (status: " + order.getStatus() + ")");
+         
+         // 2. Security check - verify user owns this order
+         if (!order.getUserId().equals(userId)) {
+             System.err.println("❌ Security: User #" + userId + " attempted to retry Order #" + orderId + " (owned by User #" + order.getUserId() + ")");
+             result.put("success", false);
+             result.put("message", "Access denied. You don't have permission to retry payment for this order.");
+             return result;
+         }
+         
+         // 3. Validate order status is "failed"
+         if (!"failed".equalsIgnoreCase(order.getStatus())) {
+             System.err.println("❌ Order #" + orderId + " is not in failed state (current: " + order.getStatus() + ")");
+             result.put("success", false);
+             result.put("message", "Only failed orders can be retried. Current status: " + order.getStatus());
+             return result;
+         }
+         
+         System.out.println("✅ Order #" + orderId + " validation passed - proceeding with retry");
+         
+         // 4. Update order status to "pending"
+         order.setStatus("pending");
+         order.setUpdatedAt(LocalDateTime.now());
+         order.setNotificationRead(false); // Reset notification so it appears as new
+         order = orderRepository.save(order);
+         
+         System.out.println("✅ Order #" + orderId + " status updated: failed → pending");
+         
+         // 5. Find existing payment record
+         Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
+         Payment payment;
+         
+         if (paymentOpt.isPresent()) {
+             // Update existing payment
+             payment = paymentOpt.get();
+             payment.setStatus("pending");
+             
+             System.out.println("✅ Found existing Payment #" + payment.getId() + " - updating status to pending");
+         } else {
+             // Create new payment record (shouldn't happen, but just in case)
+             payment = new Payment();
+             payment.setOrderId(orderId);
+             payment.setUserId(userId);
+             payment.setAmount(order.getAmount());
+             payment.setCurrency("USD");
+             payment.setPaymentMethod("KHQR");
+             payment.setStatus("pending");
+             payment.setCreatedAt(LocalDateTime.now());
+             
+             System.out.println("⚠️ No existing payment found - creating new Payment record");
+         }
+         
+         // 6. Generate new KHQR code
+         String billNumber = "ORDER-" + orderId + "-RETRY";
+         BakongKHQRService.KHQRGenerationResult khqrResult =
+                 bakongKHQRService.generateKHQR(billNumber, order.getAmount());
+         
+         if (!khqrResult.isSuccess()) {
+             System.err.println("❌ KHQR generation failed: " + khqrResult.getError());
+             result.put("success", false);
+             result.put("message", "Order status updated but KHQR generation failed: " + khqrResult.getError());
+             return result;
+         }
+         
+         System.out.println("✅ New KHQR generated - MD5: " + khqrResult.getMd5());
+         
+         // 7. Update payment with new KHQR details
+         payment.setKhqrMd5(khqrResult.getMd5());
+         payment.setKhqrQr(khqrResult.getQrCode());
+         payment.setExpiresAt(LocalDateTime.now().plusMinutes(5)); // 5 minutes timeout
+         payment = paymentRepository.save(payment);
+         
+         System.out.println("✅ Payment #" + payment.getId() + " updated with new KHQR");
+         System.out.println("   Expires at: " + payment.getExpiresAt());
+         
+         // 8. Start background monitoring
+         startPaymentMonitoring(payment.getId(), orderId);
+         
+         System.out.println("⏳ Payment monitoring started for Order #" + orderId);
+         
+         // 9. Prepare response data
+         Map<String, Object> orderData = new HashMap<>();
+         orderData.put("id", order.getId());
+         orderData.put("userId", order.getUserId());
+         orderData.put("status", order.getStatus());
+         orderData.put("amount", order.getAmount());
+         orderData.put("createdAt", order.getCreatedAt() != null ? order.getCreatedAt().toString() : null);
+         orderData.put("updatedAt", order.getUpdatedAt() != null ? order.getUpdatedAt().toString() : null);
+         orderData.put("addressId", order.getAddressId());
+         orderData.put("notificationRead", order.getNotificationRead());
+         
+         Map<String, Object> paymentData = new HashMap<>();
+         paymentData.put("id", payment.getId());
+         paymentData.put("orderId", payment.getOrderId());
+         paymentData.put("amount", payment.getAmount());
+         paymentData.put("currency", payment.getCurrency());
+         paymentData.put("paymentMethod", payment.getPaymentMethod());
+         paymentData.put("status", payment.getStatus());
+         paymentData.put("qrCode", payment.getKhqrQr());
+         paymentData.put("expiresAt", payment.getExpiresAt() != null ? payment.getExpiresAt().toString() : null);
+         
+         Map<String, Object> responseData = new HashMap<>();
+         responseData.put("order", orderData);
+         responseData.put("payment", paymentData);
+         responseData.put("qrCode", khqrResult.getQrCode());
+         
+         result.put("success", true);
+         result.put("message", "Order status updated to pending. Please scan the QR code to complete payment.");
+         result.put("data", responseData);
+         
+         System.out.println("✅ Retry payment successful for Order #" + orderId);
+         
+         return result;
+         
+     } catch (Exception e) {
+         System.err.println("❌ Error during retry payment for Order #" + orderId + ": " + e.getMessage());
+         e.printStackTrace();
+         result.put("success", false);
+         result.put("message", "Error retrying payment: " + e.getMessage());
+         return result;
+     }
+ }
 }
