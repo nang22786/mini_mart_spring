@@ -65,7 +65,7 @@ public class UserController {
         }
     }
 
-    @PostMapping("/login")
+    @PostMapping(value = { "/login", "/login/" })
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {
         AuthResponse response = userService.login(request);
 
