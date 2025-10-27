@@ -12,55 +12,45 @@ public class Payment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "payment_method")
-    private String paymentMethod;
-
-    @Column(name = "pay_date")
-    private LocalDateTime payDate;
-
-    private BigDecimal amount;
-
-    private String currency;
-
-    private String status;
-
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-
     @Column(name = "order_id")
     private Long orderId;
 
     @Column(name = "user_id")
     private Long userId;
 
-    @Column(name = "screenshot_path")
-    private String screenshotPath;
+    @Column(name = "amount", nullable = false)
+    private BigDecimal amount;
 
-    // 🆕 NEW: Transaction ID from payment screenshot
-    @Column(name = "transaction_id", unique = true)
+    @Column(name = "payment_method")
+    private String paymentMethod;
+
+    @Column(name = "currency")
+    private String currency;
+
+    @Column(name = "transaction_id")
     private String transactionId;
 
-    // 🆕 NEW: Transaction date from payment screenshot
-    @Column(name = "transaction_date")
-    private LocalDateTime transactionDate;
+    @Column(name = "status")
+    private String status;
+
+    @Column(name = "pay_date")
+    private LocalDateTime payDate;
+
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    // 🆕 NEW: KHQR fields
+    @Column(name = "khqr_md5", unique = true)
+    private String khqrMd5;
+
+    @Column(name = "khqr_qr", columnDefinition = "TEXT")
+    private String khqrQr;
+
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
 
     // Constructors
-    public Payment() {
-        this.createdAt = LocalDateTime.now();
-        this.payDate = LocalDateTime.now();
-    }
-
-    public Payment(String paymentMethod, BigDecimal amount, String currency,
-                   String status, Long orderId, Long userId) {
-        this.paymentMethod = paymentMethod;
-        this.amount = amount;
-        this.currency = currency;
-        this.status = status;
-        this.orderId = orderId;
-        this.userId = userId;
-        this.createdAt = LocalDateTime.now();
-        this.payDate = LocalDateTime.now();
-    }
+    public Payment() {}
 
     // Getters and Setters
     public Long getId() {
@@ -69,54 +59,6 @@ public class Payment {
 
     public void setId(Long id) {
         this.id = id;
-    }
-
-    public String getPaymentMethod() {
-        return paymentMethod;
-    }
-
-    public void setPaymentMethod(String paymentMethod) {
-        this.paymentMethod = paymentMethod;
-    }
-
-    public LocalDateTime getPayDate() {
-        return payDate;
-    }
-
-    public void setPayDate(LocalDateTime payDate) {
-        this.payDate = payDate;
-    }
-
-    public BigDecimal getAmount() {
-        return amount;
-    }
-
-    public void setAmount(BigDecimal amount) {
-        this.amount = amount;
-    }
-
-    public String getCurrency() {
-        return currency;
-    }
-
-    public void setCurrency(String currency) {
-        this.currency = currency;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
     }
 
     public Long getOrderId() {
@@ -135,15 +77,30 @@ public class Payment {
         this.userId = userId;
     }
 
-    public String getScreenshotPath() {
-        return screenshotPath;
+    public BigDecimal getAmount() {
+        return amount;
     }
 
-    public void setScreenshotPath(String screenshotPath) {
-        this.screenshotPath = screenshotPath;
+    public void setAmount(BigDecimal amount) {
+        this.amount = amount;
     }
 
-    // 🆕 NEW Getters/Setters for Transaction ID
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public void setCurrency(String currency) {
+        this.currency = currency;
+    }
+
     public String getTransactionId() {
         return transactionId;
     }
@@ -152,12 +109,52 @@ public class Payment {
         this.transactionId = transactionId;
     }
 
-    // 🆕 NEW Getters/Setters for Transaction Date
-    public LocalDateTime getTransactionDate() {
-        return transactionDate;
+    public String getStatus() {
+        return status;
     }
 
-    public void setTransactionDate(LocalDateTime transactionDate) {
-        this.transactionDate = transactionDate;
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public LocalDateTime getPayDate() {
+        return payDate;
+    }
+
+    public void setPayDate(LocalDateTime payDate) {
+        this.payDate = payDate;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    // 🆕 NEW: KHQR getters and setters
+    public String getKhqrMd5() {
+        return khqrMd5;
+    }
+
+    public void setKhqrMd5(String khqrMd5) {
+        this.khqrMd5 = khqrMd5;
+    }
+
+    public String getKhqrQr() {
+        return khqrQr;
+    }
+
+    public void setKhqrQr(String khqrQr) {
+        this.khqrQr = khqrQr;
+    }
+
+    public LocalDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(LocalDateTime expiresAt) {
+        this.expiresAt = expiresAt;
     }
 }

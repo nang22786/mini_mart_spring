@@ -29,8 +29,12 @@ public class Order {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "address_id")  // ✅ Can be nullable initially
+    @Column(name = "address_id")
     private Long addressId;
+
+    // ✅ ADD THIS FIELD
+    @Column(name = "notification_read")
+    private Boolean notificationRead = false;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<OrderDetail> orderDetails = new ArrayList<>();
@@ -41,6 +45,10 @@ public class Order {
         updatedAt = LocalDateTime.now();
         if (status == null) {
             status = "pending";
+        }
+        // ✅ ADD THIS
+        if (notificationRead == null) {
+            notificationRead = false;
         }
     }
 
@@ -63,7 +71,7 @@ public class Order {
         orderDetail.setOrder(this);
     }
 
-    // Getters and Setters
+    // Existing Getters and Setters...
     public Long getId() {
         return id;
     }
@@ -116,7 +124,6 @@ public class Order {
         return addressId;
     }
 
-    // ✅ ADD THIS SETTER!
     public void setAddressId(Long addressId) {
         this.addressId = addressId;
     }
@@ -127,5 +134,14 @@ public class Order {
 
     public void setOrderDetails(List<OrderDetail> orderDetails) {
         this.orderDetails = orderDetails;
+    }
+
+    // ✅ ADD THESE GETTER AND SETTER
+    public Boolean getNotificationRead() {
+        return notificationRead;
+    }
+
+    public void setNotificationRead(Boolean notificationRead) {
+        this.notificationRead = notificationRead;
     }
 }

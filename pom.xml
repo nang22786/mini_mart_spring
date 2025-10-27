@@ -132,6 +132,12 @@
 		    <version>1.19.0</version>
 		</dependency>
 		
+		<!-- Bakong KHQR -->
+		<dependency>
+		    <groupId>kh.gov.nbc.bakong_khqr</groupId>
+		    <artifactId>sdk-java</artifactId>
+		    <version>1.0.0.11</version>
+		</dependency>
     </dependencies>
     
     <build>

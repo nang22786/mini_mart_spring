@@ -10,9 +10,7 @@ public class PaymentDTO {
     private BigDecimal amount;
     private String paymentMethod;
     private String currency;
-    private String screenshotPath;
     private String transactionId;
-    private LocalDateTime transactionDate;
     private String status;
     private LocalDateTime payDate;
     private LocalDateTime createdAt;
@@ -21,18 +19,16 @@ public class PaymentDTO {
     public PaymentDTO() {}
 
     public PaymentDTO(Long id, Long orderId, Long userId, BigDecimal amount,
-                     String paymentMethod, String currency, String screenshotPath,
-                     String transactionId, LocalDateTime transactionDate, String status,
-                     LocalDateTime payDate, LocalDateTime createdAt) {
+                      String paymentMethod, String currency, 
+                      String transactionId, String status,
+                      LocalDateTime payDate, LocalDateTime createdAt) {
         this.id = id;
         this.orderId = orderId;
         this.userId = userId;
         this.amount = amount;
         this.paymentMethod = paymentMethod;
         this.currency = currency;
-        this.screenshotPath = screenshotPath;
         this.transactionId = transactionId;
-        this.transactionDate = transactionDate;
         this.status = status;
         this.payDate = payDate;
         this.createdAt = createdAt;
@@ -87,28 +83,12 @@ public class PaymentDTO {
         this.currency = currency;
     }
 
-    public String getScreenshotPath() {
-        return screenshotPath;
-    }
-
-    public void setScreenshotPath(String screenshotPath) {
-        this.screenshotPath = screenshotPath;
-    }
-
     public String getTransactionId() {
         return transactionId;
     }
 
     public void setTransactionId(String transactionId) {
         this.transactionId = transactionId;
-    }
-
-    public LocalDateTime getTransactionDate() {
-        return transactionDate;
-    }
-
-    public void setTransactionDate(LocalDateTime transactionDate) {
-        this.transactionDate = transactionDate;
     }
 
     public String getStatus() {

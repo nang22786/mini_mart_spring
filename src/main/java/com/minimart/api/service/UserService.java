@@ -6,7 +6,6 @@ import com.minimart.api.dto.LoginRequest;
 import com.minimart.api.dto.RegisterRequest;
 import com.minimart.api.dto.ResendOtpRequest;
 import com.minimart.api.dto.ResetPasswordRequest;
-import com.minimart.api.dto.UpdateUserRequest;
 import com.minimart.api.dto.UserDTO;
 import com.minimart.api.dto.VerifyOtpRequest;
 import com.minimart.api.model.Otp;
