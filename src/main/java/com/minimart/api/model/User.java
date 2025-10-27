@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "user", schema = "final")
+@Table(name = "user", schema = "public")
 public class User {
 
     @Id
@@ -44,8 +44,8 @@ public class User {
     }
 
     public User(Long userId, String userName, String email, String password, String phone,
-                String role, String status, String profileImage,
-                LocalDateTime createdAt, LocalDateTime updatedAt) {
+            String role, String status, String profileImage,
+            LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.userId = userId;
         this.userName = userName;
         this.email = email;

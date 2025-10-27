@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "advertising", schema = "final")
+@Table(name = "advertising", schema = "public")
 public class Advertising {
 
     @Id
@@ -16,7 +16,7 @@ public class Advertising {
 
     @Column(name = "create_date", nullable = false)
     private LocalDateTime createDate;
-    
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
 
@@ -55,6 +55,7 @@ public class Advertising {
     public void setCreateDate(LocalDateTime createDate) {
         this.createDate = createDate;
     }
+
     public Boolean getIsActive() {
         return isActive;
     }

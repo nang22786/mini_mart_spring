@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "\"order\"", schema = "final")
+@Table(name = "\"order\"", schema = "public")
 public class Order {
 
     @Id
@@ -58,7 +58,8 @@ public class Order {
     }
 
     // Constructors
-    public Order() {}
+    public Order() {
+    }
 
     public Order(Long userId, BigDecimal amount, String status) {
         this.userId = userId;
