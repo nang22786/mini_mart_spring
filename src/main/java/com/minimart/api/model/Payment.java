@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "payment", schema = "final")
+@Table(name = "payment", schema = "public")
 public class Payment {
 
     @Id
@@ -50,7 +50,8 @@ public class Payment {
     private LocalDateTime expiresAt;
 
     // Constructors
-    public Payment() {}
+    public Payment() {
+    }
 
     // Getters and Setters
     public Long getId() {
