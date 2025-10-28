@@ -187,7 +187,7 @@ public class ProductController {
                 // Generate RELATIVE URL (without localhost)
                 // String imageUrl = "/api/files/products/" + sanitizeFolderName(categoryName) +
                 // "/" + uploadedFilename;
-                String imageUrl = sanitizeFolderName(categoryName) + "/" + uploadedFilename;
+                String imageUrl = uploadedFilename;
 
                 product.setImage(imageUrl);
                 System.out.println("✅ Image uploaded: " + imageUrl);
@@ -300,7 +300,7 @@ public class ProductController {
                 // Generate RELATIVE URL (without localhost)
                 // String imageUrl = "/api/files/products/" +
                 // sanitizeFolderName(newCategoryName) + "/" + uploadedFilename;
-                String imageUrl = sanitizeFolderName(newCategoryName) + "/" + uploadedFilename;
+                String imageUrl = uploadedFilename;
 
                 productDetails.setImage(imageUrl);
                 System.out.println("✅ New image uploaded: " + imageUrl);
@@ -339,7 +339,7 @@ public class ProductController {
                                 // Update URL (RELATIVE)
                                 // String newImageUrl = "/api/files/products/" + newSanitizedCategory + "/" +
                                 // oldFilename;
-                                String newImageUrl = newSanitizedCategory + "/" + oldFilename;
+                                String newImageUrl = oldFilename;
 
                                 productDetails.setImage(newImageUrl);
                                 System.out.println("✅ Image moved to new category folder");
