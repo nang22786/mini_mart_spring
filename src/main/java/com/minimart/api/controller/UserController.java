@@ -148,7 +148,8 @@ public class UserController {
                 uploadedFilename = fileStorageService.storeFile(image, "profile");
 
                 // Generate RELATIVE URL (without localhost)
-                imageUrl = "/api/files/profile/" + uploadedFilename;
+                // imageUrl = "/api/files/profile/" + uploadedFilename;
+                imageUrl = uploadedFilename;
 
                 System.out.println("✅ New image uploaded: " + imageUrl);
             }

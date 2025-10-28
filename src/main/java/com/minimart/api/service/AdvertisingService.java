@@ -31,7 +31,8 @@ public class AdvertisingService {
         try {
             // Upload image to folder
             fileName = fileStorageService.storeFile(imageFile, "advertising");
-            String imageUrl = "/api/files/advertising/" + fileName;
+            // String imageUrl = "/api/files/advertising/" + fileName;
+            String imageUrl = fileName;
 
             // Create advertising entity
             Advertising advertising = new Advertising();
@@ -55,7 +56,7 @@ public class AdvertisingService {
             throw new RuntimeException("Failed to create advertising: " + e.getMessage(), e);
         }
     }
-    
+
     @Transactional
     public AdvertisingDTO toggleAdvertisingStatus(Integer id, Boolean isActive) {
         Advertising advertising = advertisingRepository.findById(id)
@@ -64,7 +65,6 @@ public class AdvertisingService {
         Advertising updated = advertisingRepository.save(advertising);
         return convertToDTO(updated);
     }
-
 
     /**
      * Get all advertising (sorted by newest first)
@@ -111,7 +111,8 @@ public class AdvertisingService {
 
             // Upload new image
             newFileName = fileStorageService.storeFile(imageFile, "advertising");
-            String newImageUrl = "/api/files/advertising/" + newFileName;
+            // String newImageUrl = "/api/files/advertising/" + newFileName;
+            String newImageUrl = newFileName;
 
             // Update entity
             advertising.setImageUrl(newImageUrl);
