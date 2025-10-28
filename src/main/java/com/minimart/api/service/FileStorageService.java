@@ -1,59 +1,27 @@
 package com.minimart.api.service;
 
-import com.minimart.api.config.FileStorageProperties;
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.minimart.api.exception.FileStorageException;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 public class FileStorageService {
 
-    private final Path fileStorageLocation;
-    
-    // Additional directory paths
-    @Value("${file.upload.profile:uploads/profile}")
-    private String profileUploadDir;
-    
-    @Value("${file.upload.category:uploads/category}")
-    private String categoryUploadDir;
-    
-    @Value("${file.upload.product:uploads/products}")
-    private String productUploadDir;
-    
-    @Value("${file.upload.payment:uploads/payments}")  // ✅ FIXED!
-    private String paymentUploadDir;
-    
-    @Value("${file.upload.advertising:uploads/advertising}")
-    private String advertisingUploadDir;
-    
+    @Autowired
+    private Cloudinary cloudinary;
+
     private static final List<String> ALLOWED_EXTENSIONS = Arrays.asList("jpg", "jpeg", "png", "gif", "webp");
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-
-    @Autowired
-    public FileStorageService(FileStorageProperties fileStorageProperties) {
-        this.fileStorageLocation = Paths.get(fileStorageProperties.getUploadDir())
-                .toAbsolutePath()
-                .normalize();
-
-        try {
-            Files.createDirectories(this.fileStorageLocation);
-            System.out.println("✅ File upload directory created: " + this.fileStorageLocation);
-        } catch (Exception ex) {
-            throw new FileStorageException("Could not create upload directory!", ex);
-        }
-    }
 
     /**
      * Store uploaded file in default directory
@@ -61,11 +29,14 @@ public class FileStorageService {
     public String storeFile(MultipartFile file) {
         return storeFile(file, null);
     }
-    
+
     /**
-     * Store uploaded file in specified directory type
-     * @param file - the file to upload
-     * @param directoryType - "profile", "category", "product", "payment", "banner" or null for default
+     * Store uploaded file in specified directory type (Cloudinary folder)
+     * 
+     * @param file          - the file to upload
+     * @param directoryType - "profile", "category", "product", "payment",
+     *                      "advertising" or null for default
+     * @return Full Cloudinary URL
      */
     public String storeFile(MultipartFile file, String directoryType) {
         System.out.println("📥 Received file upload request");
@@ -77,46 +48,39 @@ public class FileStorageService {
         // Validate file
         validateFile(file);
 
-        // Determine upload directory
-        Path uploadPath = getUploadPath(directoryType);
-        
-        // Create directory if not exists
-        try {
-            Files.createDirectories(uploadPath);
-            System.out.println("✅ Directory ensured: " + uploadPath);
-        } catch (IOException ex) {
-            throw new FileStorageException("Could not create upload directory: " + uploadPath, ex);
-        }
+        // Determine Cloudinary folder name
+        String folderName = getFolderName(directoryType);
 
         // Generate unique filename
         String originalFileName = StringUtils.cleanPath(file.getOriginalFilename());
         String fileExtension = getFileExtension(originalFileName);
-        String newFileName = UUID.randomUUID().toString() + "." + fileExtension;
+        String uniqueFileName = UUID.randomUUID().toString();
 
         try {
-            // Check if filename contains invalid characters
-            if (originalFileName.contains("..")) {
-                throw new FileStorageException("Invalid file path: " + originalFileName);
-            }
+            // Upload to Cloudinary
+            Map uploadResult = cloudinary.uploader().upload(file.getBytes(),
+                    ObjectUtils.asMap(
+                            "folder", folderName,
+                            "public_id", uniqueFileName,
+                            "resource_type", "auto"));
 
-            // Copy file to storage location
-            Path targetLocation = uploadPath.resolve(newFileName);
-            Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+            String imageUrl = uploadResult.get("secure_url").toString();
+            System.out.println("✅ File uploaded to Cloudinary: " + imageUrl);
 
-            System.out.println("✅ File stored successfully: " + targetLocation);
-            return newFileName;
+            return imageUrl;
 
         } catch (IOException ex) {
-            throw new FileStorageException("Could not store file " + newFileName, ex);
+            throw new FileStorageException("Could not upload file to Cloudinary: " + ex.getMessage(), ex);
         }
     }
 
     /**
      * Store uploaded file in category subfolder (for products)
-     * Saves to: uploads/products/{categoryName}/{filename}
-     * @param file - the file to upload
+     * Saves to Cloudinary: products/{categoryName}/{filename}
+     * 
+     * @param file         - the file to upload
      * @param categoryName - category name to create subfolder
-     * @return filename
+     * @return Full Cloudinary URL
      */
     public String storeFileInCategoryFolder(MultipartFile file, String categoryName) {
         System.out.println("📥 Received file upload request for category folder");
@@ -130,151 +94,136 @@ public class FileStorageService {
 
         // Sanitize category name for folder
         String sanitizedCategoryName = sanitizeFolderName(categoryName);
-        
-        // ✅ Create path: uploads/products/{categoryName}/
-        Path uploadPath = Paths.get(productUploadDir, sanitizedCategoryName)
-                .toAbsolutePath()
-                .normalize();
-        
-        // Create directory if not exists
-        try {
-            Files.createDirectories(uploadPath);
-            System.out.println("✅ Category folder created: " + uploadPath);
-        } catch (IOException ex) {
-            throw new FileStorageException("Could not create category upload directory: " + uploadPath, ex);
-        }
+
+        // Create Cloudinary folder path: products/{categoryName}
+        String folderPath = "products/" + sanitizedCategoryName;
 
         // Generate unique filename
         String originalFileName = StringUtils.cleanPath(file.getOriginalFilename());
         String fileExtension = getFileExtension(originalFileName);
-        String newFileName = UUID.randomUUID().toString() + "." + fileExtension;
+        String uniqueFileName = UUID.randomUUID().toString();
 
         try {
-            // Check if filename contains invalid characters
-            if (originalFileName.contains("..")) {
-                throw new FileStorageException("Invalid file path: " + originalFileName);
-            }
+            // Upload to Cloudinary
+            Map uploadResult = cloudinary.uploader().upload(file.getBytes(),
+                    ObjectUtils.asMap(
+                            "folder", folderPath,
+                            "public_id", uniqueFileName,
+                            "resource_type", "auto"));
 
-            // Copy file to storage location
-            Path targetLocation = uploadPath.resolve(newFileName);
-            Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+            String imageUrl = uploadResult.get("secure_url").toString();
+            System.out.println("✅ File uploaded to Cloudinary category folder: " + imageUrl);
 
-            System.out.println("✅ File stored successfully in category folder: " + targetLocation);
-            return newFileName;
+            return imageUrl;
 
         } catch (IOException ex) {
-            throw new FileStorageException("Could not store file " + newFileName, ex);
+            throw new FileStorageException("Could not upload file to Cloudinary: " + ex.getMessage(), ex);
         }
     }
 
     /**
-     * Delete file from default directory
+     * Delete file from Cloudinary (default directory)
      */
-    public void deleteFile(String fileName) {
-        deleteFile(fileName, null);
+    public void deleteFile(String fileUrl) {
+        deleteFile(fileUrl, null);
     }
-    
+
     /**
-     * Delete file from specified directory type
+     * Delete file from Cloudinary
+     * 
+     * @param fileUrl       - Full Cloudinary URL or public_id
+     * @param directoryType - folder type (optional, used for extracting public_id)
      */
-    public void deleteFile(String fileName, String directoryType) {
+    public void deleteFile(String fileUrl, String directoryType) {
+        if (fileUrl == null || fileUrl.isEmpty()) {
+            System.out.println("⚠️ No file URL provided for deletion");
+            return;
+        }
+
         try {
-            Path uploadPath = getUploadPath(directoryType);
-            Path filePath = uploadPath.resolve(fileName).normalize();
-            boolean deleted = Files.deleteIfExists(filePath);
-            
-            if (deleted) {
-                System.out.println("✅ File deleted: " + filePath);
+            String publicId = extractPublicId(fileUrl);
+
+            if (publicId != null) {
+                Map result = cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
+                System.out.println("✅ File deleted from Cloudinary: " + publicId);
+                System.out.println("   Result: " + result.get("result"));
             } else {
-                System.out.println("⚠️ File not found: " + filePath);
+                System.out.println("⚠️ Could not extract public_id from URL: " + fileUrl);
             }
-        } catch (IOException ex) {
-            System.err.println("❌ Error deleting file " + fileName + ": " + ex.getMessage());
+        } catch (Exception ex) {
+            System.err.println("❌ Error deleting file from Cloudinary: " + ex.getMessage());
         }
     }
 
     /**
-     * Delete file from category subfolder (for products)
-     * Deletes from: uploads/products/{categoryName}/{filename}
-     * @param fileName - the filename to delete
-     * @param categoryName - category name subfolder
+     * Delete file from category subfolder in Cloudinary
+     * 
+     * @param fileUrl      - Full Cloudinary URL
+     * @param categoryName - category name (not used but kept for compatibility)
      */
-    public void deleteFileInCategoryFolder(String fileName, String categoryName) {
-        try {
-            String sanitizedCategoryName = sanitizeFolderName(categoryName);
-            
-            // ✅ Path: uploads/products/{categoryName}/
-            Path uploadPath = Paths.get(productUploadDir, sanitizedCategoryName)
-                    .toAbsolutePath()
-                    .normalize();
-                    
-            Path filePath = uploadPath.resolve(fileName).normalize();
-            boolean deleted = Files.deleteIfExists(filePath);
-            
-            if (deleted) {
-                System.out.println("✅ File deleted from category folder: " + filePath);
-                
-                // Try to delete empty category folder
-                try {
-                    if (Files.list(uploadPath).findAny().isEmpty()) {
-                        Files.delete(uploadPath);
-                        System.out.println("✅ Empty category folder deleted: " + uploadPath);
-                    }
-                } catch (IOException e) {
-                    // Ignore if folder is not empty or cannot be deleted
-                }
-            } else {
-                System.out.println("⚠️ File not found in category folder: " + filePath);
-            }
-        } catch (IOException ex) {
-            System.err.println("❌ Error deleting file " + fileName + " from category folder: " + ex.getMessage());
-        }
+    public void deleteFileInCategoryFolder(String fileUrl, String categoryName) {
+        // Cloudinary doesn't need category name to delete, just the URL
+        deleteFile(fileUrl, null);
     }
 
     /**
-     * Get file storage location for specific directory type
+     * Get folder name based on directory type
      */
-    public Path getFileStorageLocation(String directoryType) {
-        return getUploadPath(directoryType);
-    }
-    
-    /**
-     * Get default file storage location
-     */
-    public Path getFileStorageLocation() {
-        return fileStorageLocation;
-    }
-    
-    /**
-     * Get upload path based on directory type
-     */
-    private Path getUploadPath(String directoryType) {
+    private String getFolderName(String directoryType) {
         if (directoryType == null || directoryType.isEmpty()) {
-            return fileStorageLocation;
+            return "uploads";
         }
-        
-        String uploadDir;
+
         switch (directoryType.toLowerCase()) {
             case "profile":
-                uploadDir = profileUploadDir;
-                break;
+                return "profile";
             case "category":
-                uploadDir = categoryUploadDir;
-                break;
+                return "category";
             case "product":
-                uploadDir = productUploadDir;
-                break;
-            case "payment":  // ✅ FIXED!
-                uploadDir = paymentUploadDir;  // ✅ FIXED!
-                break;
+                return "products";
+            case "payment":
+                return "payments";
             case "advertising":
-                uploadDir = advertisingUploadDir;
-                break;
+                return "advertising";
             default:
-                return fileStorageLocation;
+                return "uploads";
         }
-        
-        return Paths.get(uploadDir).toAbsolutePath().normalize();
+    }
+
+    /**
+     * Extract public_id from Cloudinary URL
+     * Example URL:
+     * https://res.cloudinary.com/daovbs2bm/image/upload/v1234567/profile/uuid-123.jpg
+     * Returns: profile/uuid-123
+     */
+    private String extractPublicId(String imageUrl) {
+        try {
+            // Check if it's a Cloudinary URL
+            if (!imageUrl.contains("cloudinary.com")) {
+                return null;
+            }
+
+            // Split by /upload/ to get the path after upload
+            String[] parts = imageUrl.split("/upload/");
+            if (parts.length < 2) {
+                return null;
+            }
+
+            // Remove version number (v1234567/)
+            String pathWithVersion = parts[1];
+            String path = pathWithVersion.replaceFirst("v\\d+/", "");
+
+            // Remove file extension
+            int lastDotIndex = path.lastIndexOf('.');
+            if (lastDotIndex > 0) {
+                return path.substring(0, lastDotIndex);
+            }
+
+            return path;
+        } catch (Exception e) {
+            System.err.println("❌ Error extracting public_id: " + e.getMessage());
+            return null;
+        }
     }
 
     /**

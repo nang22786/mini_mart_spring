@@ -138,6 +138,14 @@
 		    <artifactId>sdk-java</artifactId>
 		    <version>1.0.0.11</version>
 		</dependency>
+
+        <!-- Cloudinary for image upload and management -->
+        <dependency>
+            <groupId>com.cloudinary</groupId>
+            <artifactId>cloudinary-http44</artifactId>
+            <version>1.37.0</version>
+        </dependency>
+
     </dependencies>
     
     <build>
