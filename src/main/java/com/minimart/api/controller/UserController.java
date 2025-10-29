@@ -1,5 +1,6 @@
 package com.minimart.api.controller;
 
+import com.cloudinary.Cloudinary;
 import com.minimart.api.dto.AuthResponse;
 import com.minimart.api.dto.ForgotPasswordRequest;
 import com.minimart.api.dto.LoginRequest;
@@ -31,6 +32,9 @@ public class UserController {
 
     @Autowired
     private FileStorageService fileStorageService;
+
+    @Autowired
+    private Cloudinary cloudinary;
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody RegisterRequest request) {
