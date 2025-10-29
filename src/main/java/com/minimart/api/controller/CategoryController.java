@@ -226,7 +226,7 @@ public class CategoryController {
                 uploadedFilename = fileStorageService.storeFile(imageFile, "category");
 
                 // Generate RELATIVE URL (without localhost)
-                String imageUrl = "/api/files/category/" + uploadedFilename;
+                String imageUrl = uploadedFilename;
 
                 categoryDetails.setImage(imageUrl);
                 System.out.println("✅ New image uploaded: " + imageUrl);
