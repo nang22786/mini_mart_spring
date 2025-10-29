@@ -2,9 +2,6 @@ package com.minimart.api.controller;
 
 import com.minimart.api.dto.AdvertisingDTO;
 import com.minimart.api.service.AdvertisingService;
-import com.cloudinary.Cloudinary; // 🔥 added
-import com.cloudinary.utils.ObjectUtils; // 🔥 added
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -23,10 +20,6 @@ public class AdvertisingController {
 
     @Autowired
     private AdvertisingService advertisingService;
-
-    // 🔥 Added Cloudinary integration
-    @Autowired
-    private Cloudinary cloudinary;
 
     /**
      * Create new advertising with image
@@ -148,22 +141,7 @@ public class AdvertisingController {
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // 🔥 Get old image before update
-            AdvertisingDTO oldAd = advertisingService.getAdvertisingById(id);
-            String oldImageUrl = oldAd != null ? oldAd.getImage() : null;
-
             AdvertisingDTO updated = advertisingService.updateAdvertisingImage(id, imageFile);
-
-            // 🔥 Delete old image from Cloudinary after successful update
-            if (oldImageUrl != null && !oldImageUrl.isEmpty()) {
-                try {
-                    String publicId = extractPublicId(oldImageUrl);
-                    cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
-                    System.out.println("🗑️ Deleted old Cloudinary image: " + publicId);
-                } catch (Exception ex) {
-                    System.err.println("⚠️ Failed to delete old Cloudinary image: " + ex.getMessage());
-                }
-            }
 
             response.put("success", true);
             response.put("message", "Advertising image updated successfully");
@@ -199,22 +177,7 @@ public class AdvertisingController {
         System.out.println("ID: " + id);
 
         try {
-            // 🔥 Get existing ad image before deletion
-            AdvertisingDTO existingAd = advertisingService.getAdvertisingById(id);
-            String imageUrl = existingAd != null ? existingAd.getImage() : null;
-
             advertisingService.deleteAdvertising(id);
-
-            // 🔥 Delete from Cloudinary
-            if (imageUrl != null && !imageUrl.isEmpty()) {
-                try {
-                    String publicId = extractPublicId(imageUrl);
-                    cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
-                    System.out.println("🗑️ Deleted Cloudinary image for ad: " + publicId);
-                } catch (Exception ex) {
-                    System.err.println("⚠️ Failed to delete Cloudinary image: " + ex.getMessage());
-                }
-            }
 
             response.put("success", true);
             response.put("message", "Advertising deleted successfully");
@@ -237,40 +200,42 @@ public class AdvertisingController {
         }
     }
 
+    /**
+     * Toggle advertising active/inactive status
+     * PATCH /api/advertising/{id}/status
+     */
     @PatchMapping("/{id}/status")
     public ResponseEntity<Map<String, Object>> toggleAdvertisingStatus(
             @PathVariable Integer id,
             @RequestParam("isActive") Boolean isActive) {
 
         Map<String, Object> response = new HashMap<>();
+
+        System.out.println("=== TOGGLE ADVERTISING STATUS REQUEST ===");
+        System.out.println("ID: " + id);
+        System.out.println("New Status: " + isActive);
+
         try {
             AdvertisingDTO updated = advertisingService.toggleAdvertisingStatus(id, isActive);
+
             response.put("success", true);
             response.put("message", "Advertising status updated");
             response.put("data", updated);
             return ResponseEntity.ok(response);
+
         } catch (RuntimeException e) {
+            System.err.println("❌ Not found: " + e.getMessage());
+
             response.put("success", false);
             response.put("message", e.getMessage());
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+
         } catch (Exception e) {
+            System.err.println("❌ Error: " + e.getMessage());
+
             response.put("success", false);
             response.put("message", "Error updating status: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-        }
-    }
-
-    // 🔥 Added helper method for Cloudinary public ID extraction
-    private String extractPublicId(String imageUrl) {
-        if (imageUrl == null || imageUrl.isEmpty())
-            return null;
-        try {
-            String[] parts = imageUrl.split("/");
-            String fileWithExt = parts[parts.length - 1];
-            return fileWithExt.substring(0, fileWithExt.lastIndexOf('.'));
-        } catch (Exception e) {
-            System.err.println("⚠️ Failed to extract public ID: " + e.getMessage());
-            return null;
         }
     }
 }

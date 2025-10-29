@@ -33,9 +33,6 @@ public class UserController {
     @Autowired
     private FileStorageService fileStorageService;
 
-    @Autowired
-    private Cloudinary cloudinary;
-
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody RegisterRequest request) {
         AuthResponse response = userService.register(request);

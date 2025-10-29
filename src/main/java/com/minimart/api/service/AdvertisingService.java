@@ -27,16 +27,15 @@ public class AdvertisingService {
     public AdvertisingDTO createAdvertising(MultipartFile imageFile) {
         System.out.println("📢 Creating new advertising");
 
-        String fileName = null;
+        String cloudinaryUrl = null;
         try {
-            // Upload image to folder
-            fileName = fileStorageService.storeFile(imageFile, "advertising");
-            // String imageUrl = "/api/files/advertising/" + fileName;
-            String imageUrl = fileName;
+            // Upload image to Cloudinary
+            cloudinaryUrl = fileStorageService.storeFile(imageFile, "advertising");
+            System.out.println("✅ Image uploaded to Cloudinary: " + cloudinaryUrl);
 
             // Create advertising entity
             Advertising advertising = new Advertising();
-            advertising.setImageUrl(imageUrl);
+            advertising.setImageUrl(cloudinaryUrl); // Store full Cloudinary URL
 
             // Save to database
             Advertising saved = advertisingRepository.save(advertising);
@@ -44,11 +43,11 @@ public class AdvertisingService {
             return convertToDTO(saved);
 
         } catch (Exception e) {
-            // If an error occurs, delete uploaded image
-            if (fileName != null) {
+            // If an error occurs, delete uploaded image from Cloudinary
+            if (cloudinaryUrl != null) {
                 try {
-                    fileStorageService.deleteFile(fileName, "advertising");
-                    System.out.println("🧹 Rolled back image file after error: " + fileName);
+                    fileStorageService.deleteFile(cloudinaryUrl);
+                    System.out.println("🧹 Rolled back image from Cloudinary after error");
                 } catch (Exception delEx) {
                     System.err.println("⚠️ Failed to delete uploaded file after error: " + delEx.getMessage());
                 }
@@ -57,12 +56,20 @@ public class AdvertisingService {
         }
     }
 
+    /**
+     * Toggle advertising active status
+     */
     @Transactional
     public AdvertisingDTO toggleAdvertisingStatus(Integer id, Boolean isActive) {
+        System.out.println("🔄 Toggling advertising status for ID: " + id + " to " + isActive);
+
         Advertising advertising = advertisingRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Advertising not found with id: " + id));
+
         advertising.setIsActive(isActive);
         Advertising updated = advertisingRepository.save(advertising);
+
+        System.out.println("✅ Advertising status updated");
         return convertToDTO(updated);
     }
 
@@ -97,36 +104,33 @@ public class AdvertisingService {
         Advertising advertising = advertisingRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Advertising not found with id: " + id));
 
-        String oldFileName = null;
-        String newFileName = null;
+        String oldImageUrl = advertising.getImageUrl();
+        String newImageUrl = null;
 
         try {
-            // Delete old image
-            String oldImageUrl = advertising.getImageUrl();
+            // 🗑️ DELETE OLD IMAGE FROM CLOUDINARY
             if (oldImageUrl != null && !oldImageUrl.isEmpty()) {
-                oldFileName = oldImageUrl.substring(oldImageUrl.lastIndexOf("/") + 1);
-                fileStorageService.deleteFile(oldFileName, "advertising");
-                System.out.println("✅ Old image deleted: " + oldFileName);
+                fileStorageService.deleteFile(oldImageUrl);
+                System.out.println("✅ Old image deleted from Cloudinary: " + oldImageUrl);
             }
 
-            // Upload new image
-            newFileName = fileStorageService.storeFile(imageFile, "advertising");
-            // String newImageUrl = "/api/files/advertising/" + newFileName;
-            String newImageUrl = newFileName;
+            // ⬆️ UPLOAD NEW IMAGE TO CLOUDINARY
+            newImageUrl = fileStorageService.storeFile(imageFile, "advertising");
+            System.out.println("✅ New image uploaded to Cloudinary: " + newImageUrl);
 
-            // Update entity
+            // Update entity with new Cloudinary URL
             advertising.setImageUrl(newImageUrl);
             Advertising updated = advertisingRepository.save(advertising);
 
-            System.out.println("✅ Advertising image updated");
+            System.out.println("✅ Advertising image updated successfully");
             return convertToDTO(updated);
 
         } catch (Exception e) {
-            // Delete new image if error happens
-            if (newFileName != null) {
+            // Rollback: Delete new image if update fails
+            if (newImageUrl != null) {
                 try {
-                    fileStorageService.deleteFile(newFileName, "advertising");
-                    System.out.println("🧹 Rolled back new image after update error: " + newFileName);
+                    fileStorageService.deleteFile(newImageUrl);
+                    System.out.println("🧹 Rolled back new image after update error");
                 } catch (Exception delEx) {
                     System.err.println("⚠️ Failed to rollback uploaded image: " + delEx.getMessage());
                 }
@@ -136,7 +140,7 @@ public class AdvertisingService {
     }
 
     /**
-     * Delete advertising and its image file
+     * Delete advertising and its image file from Cloudinary
      */
     @Transactional
     public void deleteAdvertising(Integer id) {
@@ -145,17 +149,19 @@ public class AdvertisingService {
         Advertising advertising = advertisingRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Advertising not found with id: " + id));
 
+        // 🗑️ DELETE IMAGE FROM CLOUDINARY
         String imageUrl = advertising.getImageUrl();
         if (imageUrl != null && !imageUrl.isEmpty()) {
             try {
-                String filename = imageUrl.substring(imageUrl.lastIndexOf("/") + 1);
-                fileStorageService.deleteFile(filename, "advertising");
-                System.out.println("✅ Image file deleted: " + filename);
+                fileStorageService.deleteFile(imageUrl);
+                System.out.println("✅ Image deleted from Cloudinary: " + imageUrl);
             } catch (Exception e) {
-                System.err.println("⚠️ Could not delete image file: " + e.getMessage());
+                System.err.println("⚠️ Could not delete image from Cloudinary: " + e.getMessage());
+                // Continue with database deletion even if Cloudinary delete fails
             }
         }
 
+        // Delete from database
         advertisingRepository.deleteById(id);
         System.out.println("✅ Advertising deleted from database");
     }
@@ -166,7 +172,7 @@ public class AdvertisingService {
     private AdvertisingDTO convertToDTO(Advertising advertising) {
         AdvertisingDTO dto = new AdvertisingDTO();
         dto.setId(advertising.getId());
-        dto.setImageUrl(advertising.getImageUrl());
+        dto.setImageUrl(advertising.getImageUrl()); // Full Cloudinary URL
         dto.setCreateDate(advertising.getCreateDate());
         dto.setIsActive(advertising.getIsActive());
         return dto;
