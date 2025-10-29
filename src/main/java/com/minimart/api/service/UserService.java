@@ -41,6 +41,9 @@ public class UserService {
     @Autowired
     private JwtUtil jwtUtil;
 
+    @Autowired
+    private FileStorageService fileStorageService;
+
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
             return new AuthResponse(false, "Email already exists");
@@ -296,8 +299,20 @@ public class UserService {
                 user.setPhone(phone);
             }
 
-            // Update profile image if provided
+            // 🗑️ DELETE OLD PROFILE IMAGE FROM CLOUDINARY if changed
             if (profileImage != null && !profileImage.trim().isEmpty()) {
+                String oldProfileImage = user.getProfileImage();
+
+                if (oldProfileImage != null && !oldProfileImage.isEmpty() &&
+                        !oldProfileImage.equals(profileImage)) {
+                    try {
+                        fileStorageService.deleteFile(oldProfileImage);
+                        System.out.println("✅ Old profile image deleted from Cloudinary: " + oldProfileImage);
+                    } catch (Exception e) {
+                        System.err.println("⚠️ Failed to delete old profile image: " + e.getMessage());
+                    }
+                }
+
                 System.out.println("   Updating profile image: " + profileImage);
                 user.setProfileImage(profileImage);
             }
@@ -333,6 +348,21 @@ public class UserService {
 
     public boolean deleteUser(Long userId) {
         if (userRepository.existsById(userId)) {
+            // 🗑️ DELETE PROFILE IMAGE FROM CLOUDINARY before deleting user
+            Optional<User> userOpt = userRepository.findById(userId);
+            if (userOpt.isPresent()) {
+                User user = userOpt.get();
+                if (user.getProfileImage() != null && !user.getProfileImage().isEmpty()) {
+                    try {
+                        fileStorageService.deleteFile(user.getProfileImage());
+                        System.out.println("✅ Profile image deleted from Cloudinary for User #" + userId);
+                    } catch (Exception e) {
+                        System.err.println(
+                                "⚠️ Failed to delete profile image for User #" + userId + ": " + e.getMessage());
+                    }
+                }
+            }
+
             userRepository.deleteById(userId);
             return true;
         }
