@@ -36,28 +36,28 @@ import java.util.concurrent.CompletableFuture;
 
 @Service
 public class OrderService {
-    
+
     @Autowired
     private OrderRepository orderRepository;
-    
+
     @Autowired
     private OrderDetailRepository orderDetailRepository;
-    
+
     @Autowired
     private PaymentRepository paymentRepository;
-    
+
     @Autowired
     private ProductRepository productRepository;
-    
+
     @Autowired
     private StockRepository stockRepository;
-    
+
     @Autowired
     private EmailService emailService;
-    
+
     @Autowired
     private TelegramNotificationService telegramService;
-    
+
     @Autowired
     private BakongKHQRService bakongKHQRService;
 
@@ -70,7 +70,7 @@ public class OrderService {
     // ============================================================
     // 🆕 NEW: CHECKOUT WITH KHQR (Order Before Payment Flow)
     // ============================================================
-    
+
     /**
      * 🆕 CHECKOUT: Create Order (pending) + Generate KHQR
      * POST /api/orders/checkout
@@ -80,8 +80,7 @@ public class OrderService {
             Long userId,
             BigDecimal amount,
             List<Map<String, Object>> items,
-            Long addressId
-    ) {
+            Long addressId) {
         Map<String, Object> response = new HashMap<>();
 
         try {
@@ -140,8 +139,7 @@ public class OrderService {
 
             // 4. Generate KHQR
             String billNumber = "ORDER-" + order.getId();
-            BakongKHQRService.KHQRGenerationResult khqrResult =
-                    bakongKHQRService.generateKHQR(billNumber, amount);
+            BakongKHQRService.KHQRGenerationResult khqrResult = bakongKHQRService.generateKHQR(billNumber, amount);
 
             if (!khqrResult.isSuccess()) {
                 response.put("success", false);
@@ -212,8 +210,8 @@ public class OrderService {
             System.out.println("🔍 Starting payment monitoring - Payment #" + paymentId);
 
             // Check every 10 seconds for 5 minutes (30 checks)
-            for (int i = 0; i < 30; i++) {
-                Thread.sleep(10000); // Wait 10 seconds
+            for (int i = 0; i < 10; i++) {
+                Thread.sleep(30000); // Wait 30 seconds
 
                 Payment payment = paymentRepository.findById(paymentId).orElse(null);
                 if (payment == null) {
@@ -223,7 +221,8 @@ public class OrderService {
 
                 // If already paid or failed, stop monitoring
                 if ("paid".equals(payment.getStatus()) || "failed".equals(payment.getStatus())) {
-                    System.out.println("⏹️ Monitoring stopped - Payment #" + paymentId + " status: " + payment.getStatus());
+                    System.out.println(
+                            "⏹️ Monitoring stopped - Payment #" + paymentId + " status: " + payment.getStatus());
                     return;
                 }
 
@@ -235,7 +234,7 @@ public class OrderService {
                 }
 
                 // Check payment status with Bakong API
-                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/30)");
+                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/10)");
 
                 boolean isPaid = checkBakongPayment(payment);
 
@@ -247,7 +246,7 @@ public class OrderService {
             }
 
             // If we reach here, payment timed out
-            System.out.println("⏱️ Payment monitoring timeout (1 min) - Payment #" + paymentId);
+            System.out.println("⏱️ Payment monitoring timeout (5 min) - Payment #" + paymentId);
             updateOrderToFailed(orderId, paymentId);
 
         } catch (Exception e) {
@@ -266,6 +265,10 @@ public class OrderService {
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Bearer " + bakongApiToken);
             headers.set("Content-Type", "application/json");
+            headers.set("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            headers.set("Accept", "application/json");
+            headers.set("Accept-Language", "en-US,en;q=0.9");
 
             Map<String, String> body = new HashMap<>();
             body.put("md5", payment.getKhqrMd5());
@@ -273,8 +276,11 @@ public class OrderService {
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
             RestTemplate restTemplate = new RestTemplate();
-            ResponseEntity<BakongTransactionResponse> responseEntity =
-                    restTemplate.exchange(url, HttpMethod.POST, request, BakongTransactionResponse.class);
+            ResponseEntity<BakongTransactionResponse> responseEntity = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    BakongTransactionResponse.class);
 
             BakongTransactionResponse bakongResponse = responseEntity.getBody();
 
@@ -351,15 +357,15 @@ public class OrderService {
                 // 1. Send to ORDER BOT (Telegram - owner)
                 telegramService.sendOrderSuccessNotification(order);
                 System.out.println("✅ Order notification sent to Telegram (owner)");
-                
+
                 // 2. Send to PAYMENT BOT (Telegram - owner)
                 telegramService.sendPaymentNotification(order, payment);
                 System.out.println("✅ Payment notification sent to Payment Bot (owner)");
-                
+
                 // 3. Send email to customer
                 emailService.sendOrderSuccessEmail(order);
                 System.out.println("✅ Order email sent to customer");
-                
+
             } catch (Exception e) {
                 System.err.println("⚠️ Failed to send notifications: " + e.getMessage());
                 // Don't fail the whole transaction if notification fails
@@ -408,132 +414,129 @@ public class OrderService {
     public Map<String, Object> cleanupFailedOrders() {
         try {
             LocalDateTime cutoffDate = LocalDateTime.now().minusDays(7);
-            
+
             List<Order> failedOrders = orderRepository.findByStatusAndCreatedAtBefore("failed", cutoffDate);
-            
+
             int deletedCount = 0;
             for (Order order : failedOrders) {
                 // Delete order details first
                 List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
                 orderDetailRepository.deleteAll(orderDetails);
-                
+
                 // Delete payment records
                 paymentRepository.findByOrderId(order.getId()).ifPresent(payment -> {
                     paymentRepository.delete(payment);
                 });
-                
+
                 // Delete order
                 orderRepository.delete(order);
                 deletedCount++;
             }
-            
+
             System.out.println("🗑️ Cleaned up " + deletedCount + " failed orders older than 7 days");
-            
+
             return Map.of(
-                "success", true,
-                "deletedCount", deletedCount,
-                "message", "Cleaned up " + deletedCount + " failed orders"
-            );
-            
+                    "success", true,
+                    "deletedCount", deletedCount,
+                    "message", "Cleaned up " + deletedCount + " failed orders");
+
         } catch (Exception e) {
             System.err.println("❌ Error cleaning up failed orders: " + e.getMessage());
             return Map.of(
-                "success", false,
-                "message", "Error: " + e.getMessage()
-            );
+                    "success", false,
+                    "message", "Error: " + e.getMessage());
         }
     }
 
     // ============================================================
     // 📊 VIEW METHODS (For Customer & Admin)
     // ============================================================
-    
+
     /**
      * Get all orders for a user
      */
     public List<Order> getUserOrders(Long userId) {
         return orderRepository.findByUserIdOrderByCreatedAtDesc(userId);
     }
-    
+
     /**
      * Get user orders as summary (for My Orders)
      */
     public List<OrderSummaryDTO> getUserOrdersSummary(Long userId) {
         List<Order> orders = orderRepository.findByUserIdOrderByCreatedAtDesc(userId);
         List<OrderSummaryDTO> summaries = new ArrayList<>();
-        
+
         for (Order order : orders) {
             int itemCount = orderDetailRepository.findByOrder(order).size();
             Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
             LocalDateTime payDate = payment != null ? payment.getPayDate() : null;
             summaries.add(new OrderSummaryDTO(
-                order.getId(),
-                order.getUserId(),
-                order.getStatus(),
-                order.getAmount(),
-                order.getCreatedAt(),
-                itemCount,
-                order.getAddressId(),
-                payDate,
-                order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
+                    order.getId(),
+                    order.getUserId(),
+                    order.getStatus(),
+                    order.getAmount(),
+                    order.getCreatedAt(),
+                    itemCount,
+                    order.getAddressId(),
+                    payDate,
+                    order.getNotificationRead() != null ? order.getNotificationRead() : false // ✅ ADD THIS
             ));
         }
-        
+
         return summaries;
     }
-    
+
     /**
      * Get order by ID
      */
     public Order getOrderById(Long orderId) {
         return orderRepository.findById(orderId)
-            .orElseThrow(() -> new RuntimeException("Order not found"));
+                .orElseThrow(() -> new RuntimeException("Order not found"));
     }
-    
+
     /**
      * Get order details with items and payment (for single order view)
      */
     public OrderDTO getOrderDetails(Long orderId) {
         Order order = orderRepository.findById(orderId)
-            .orElseThrow(() -> new RuntimeException("Order not found"));
-        
+                .orElseThrow(() -> new RuntimeException("Order not found"));
+
         OrderDTO dto = new OrderDTO(
-            order.getId(),
-            order.getStatus(),
-            order.getAmount(),
-            order.getCreatedAt(),
-            order.getUpdatedAt(),
-            order.getUserId(),
-            order.getAddressId(),
-            order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
+                order.getId(),
+                order.getStatus(),
+                order.getAmount(),
+                order.getCreatedAt(),
+                order.getUpdatedAt(),
+                order.getUserId(),
+                order.getAddressId(),
+                order.getNotificationRead() != null ? order.getNotificationRead() : false // ✅ ADD THIS
         );
-        
+
         // Get order items
         List<OrderDetail> details = orderDetailRepository.findByOrder(order);
         List<OrderDetailDTO> itemDTOs = new ArrayList<>();
-        
+
         for (OrderDetail detail : details) {
             Product product = productRepository.findById(detail.getProductId()).orElse(null);
-            
+
             OrderDetailDTO itemDTO = new OrderDetailDTO(
-                detail.getId(),
-                detail.getProductId(),
-                product != null ? product.getName() : "Unknown Product",
-                product != null ? product.getImage() : null,
-                detail.getQty(),
-                detail.getPrice()
-            );
+                    detail.getId(),
+                    detail.getProductId(),
+                    product != null ? product.getName() : "Unknown Product",
+                    product != null ? product.getImage() : null,
+                    detail.getQty(),
+                    detail.getPrice());
             itemDTOs.add(itemDTO);
         }
-        
+
         dto.setItems(itemDTOs);
-        
+
         // Get payment info
         Payment payment = paymentRepository.findByOrderId(orderId).orElse(null);
         if (payment != null) {
             dto.setPayment(convertToPaymentDTO(payment));
         }
-        
+
         return dto;
     }
 
@@ -543,24 +546,24 @@ public class OrderService {
     public List<OrderSummaryDTO> getAllOrdersSummary() {
         List<Order> orders = orderRepository.findAllByOrderByCreatedAtDesc();
         List<OrderSummaryDTO> summaries = new ArrayList<>();
-        
+
         for (Order order : orders) {
             int itemCount = orderDetailRepository.findByOrder(order).size();
             Payment payment = paymentRepository.findByOrderId(order.getId()).orElse(null);
             LocalDateTime payDate = payment != null ? payment.getPayDate() : null;
             summaries.add(new OrderSummaryDTO(
-                order.getId(),
-                order.getUserId(),
-                order.getStatus(),
-                order.getAmount(),
-                order.getCreatedAt(),
-                itemCount,
-                order.getAddressId(),
-                payDate,
-                order.getNotificationRead() != null ? order.getNotificationRead() : false  // ✅ ADD THIS
+                    order.getId(),
+                    order.getUserId(),
+                    order.getStatus(),
+                    order.getAmount(),
+                    order.getCreatedAt(),
+                    itemCount,
+                    order.getAddressId(),
+                    payDate,
+                    order.getNotificationRead() != null ? order.getNotificationRead() : false // ✅ ADD THIS
             ));
         }
-        
+
         return summaries;
     }
 
@@ -569,19 +572,19 @@ public class OrderService {
      */
     public Map<String, Object> updateOrderStatus(Long orderId, String newStatus) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
             // Find order
             Order order = orderRepository.findById(orderId)
                     .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
-            
+
             String oldStatus = order.getStatus();
-            
+
             // Update order status
             order.setStatus(newStatus);
             order.setUpdatedAt(LocalDateTime.now());
             orderRepository.save(order);
-            
+
             // Update payment status if exists
             Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
             if (paymentOpt.isPresent()) {
@@ -592,9 +595,9 @@ public class OrderService {
                 }
                 paymentRepository.save(payment);
             }
-            
+
             System.out.println("✅ Order #" + orderId + " status: " + oldStatus + " → " + newStatus);
-            
+
             // Return simple data (convert LocalDateTime to String!)
             Map<String, Object> orderData = new HashMap<>();
             orderData.put("id", order.getId());
@@ -604,12 +607,12 @@ public class OrderService {
             orderData.put("createdAt", order.getCreatedAt() != null ? order.getCreatedAt().toString() : null);
             orderData.put("updatedAt", order.getUpdatedAt() != null ? order.getUpdatedAt().toString() : null);
             orderData.put("addressId", order.getAddressId());
-            
+
             result.put("success", true);
             result.put("message", "Order #" + orderId + " status updated to " + newStatus + " successfully");
             result.put("order", orderData);
             return result;
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error updating order status: " + e.getMessage());
             result.put("success", false);
@@ -617,40 +620,40 @@ public class OrderService {
             return result;
         }
     }
-    
+
     /**
      * 🆕 DELETE ORDER (Owner only)
      */
     public Map<String, Object> deleteOrder(Long orderId) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
             // Check if order exists
             Order order = orderRepository.findById(orderId)
                     .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
-            
+
             // Delete payment if exists
             Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
             if (paymentOpt.isPresent()) {
                 paymentRepository.delete(paymentOpt.get());
                 System.out.println("🗑️ Deleted payment for Order #" + orderId);
             }
-            
+
             // Delete order details (using your existing method)
             List<OrderDetail> orderDetails = orderDetailRepository.findByOrder(order);
             if (!orderDetails.isEmpty()) {
                 orderDetailRepository.deleteAll(orderDetails);
                 System.out.println("🗑️ Deleted " + orderDetails.size() + " order details for Order #" + orderId);
             }
-            
+
             // Delete order
             orderRepository.delete(order);
             System.out.println("🗑️ Deleted Order #" + orderId);
-            
+
             result.put("success", true);
             result.put("message", "Order #" + orderId + " and all related data deleted successfully");
             return result;
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error deleting order: " + e.getMessage());
             result.put("success", false);
@@ -666,21 +669,20 @@ public class OrderService {
         if (payment == null) {
             return null;
         }
-        
+
         return new PaymentDTO(
-            payment.getId(),
-            payment.getOrderId(),
-            payment.getUserId(),
-            payment.getAmount(),
-            payment.getPaymentMethod(),
-            payment.getCurrency(),
-            payment.getTransactionId(),
-            payment.getStatus(),
-            payment.getPayDate(),
-            payment.getCreatedAt()
-        );
+                payment.getId(),
+                payment.getOrderId(),
+                payment.getUserId(),
+                payment.getAmount(),
+                payment.getPaymentMethod(),
+                payment.getCurrency(),
+                payment.getTransactionId(),
+                payment.getStatus(),
+                payment.getPayDate(),
+                payment.getCreatedAt());
     }
- // ============================================================
+    // ============================================================
     // 🔔 NOTIFICATION METHODS
     // ============================================================
 
@@ -690,29 +692,29 @@ public class OrderService {
     @Transactional
     public Map<String, Object> markNotificationAsRead(Long orderId, Long userId) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
             // Find order
             Order order = orderRepository.findById(orderId)
                     .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
-            
+
             // Check if order belongs to user
             if (!order.getUserId().equals(userId)) {
                 result.put("success", false);
                 result.put("message", "Access denied. This order doesn't belong to you.");
                 return result;
             }
-            
+
             // Mark as read
             order.setNotificationRead(true);
             orderRepository.save(order);
-            
+
             System.out.println("✅ Order #" + orderId + " notification marked as read by User #" + userId);
-            
+
             result.put("success", true);
             result.put("message", "Notification marked as read");
             return result;
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error marking notification as read: " + e.getMessage());
             result.put("success", false);
@@ -727,11 +729,11 @@ public class OrderService {
     @Transactional
     public Map<String, Object> markAllFailedAsRead(Long userId) {
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
             // Find all unread failed orders for user
             List<Order> failedOrders = orderRepository.findByUserIdAndStatus(userId, "failed");
-            
+
             int markedCount = 0;
             for (Order order : failedOrders) {
                 if (order.getNotificationRead() == null || !order.getNotificationRead()) {
@@ -740,14 +742,14 @@ public class OrderService {
                     markedCount++;
                 }
             }
-            
+
             System.out.println("✅ Marked " + markedCount + " failed order notifications as read for User #" + userId);
-            
+
             result.put("success", true);
             result.put("message", "All failed order notifications marked as read");
             result.put("markedCount", markedCount);
             return result;
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error marking all failed as read: " + e.getMessage());
             result.put("success", false);
@@ -763,154 +765,156 @@ public class OrderService {
     public Integer getUnreadFailedCount(Long userId) {
         try {
             List<Order> failedOrders = orderRepository.findByUserIdAndStatus(userId, "failed");
-            
+
             int count = 0;
             for (Order order : failedOrders) {
                 if (order.getNotificationRead() == null || !order.getNotificationRead()) {
                     count++;
                 }
             }
-            
+
             return count;
-            
+
         } catch (Exception e) {
             System.err.println("❌ Error getting unread failed count: " + e.getMessage());
             return 0;
         }
     }
-    
- // ============================================================
- // 🔄 RETRY PAYMENT FOR FAILED ORDER
- // ============================================================
- @Transactional
- public Map<String, Object> retryPayment(Long orderId, Long userId) {
-     Map<String, Object> result = new HashMap<>();
-     
-     try {
-         // 1. Find the order
-         Order order = orderRepository.findById(orderId)
-                 .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
-         
-         System.out.println("🔄 Found Order #" + orderId + " (status: " + order.getStatus() + ")");
-         
-         // 2. Security check - verify user owns this order
-         if (!order.getUserId().equals(userId)) {
-             System.err.println("❌ Security: User #" + userId + " attempted to retry Order #" + orderId + " (owned by User #" + order.getUserId() + ")");
-             result.put("success", false);
-             result.put("message", "Access denied. You don't have permission to retry payment for this order.");
-             return result;
-         }
-         
-         // 3. Validate order status is "failed"
-         if (!"failed".equalsIgnoreCase(order.getStatus())) {
-             System.err.println("❌ Order #" + orderId + " is not in failed state (current: " + order.getStatus() + ")");
-             result.put("success", false);
-             result.put("message", "Only failed orders can be retried. Current status: " + order.getStatus());
-             return result;
-         }
-         
-         System.out.println("✅ Order #" + orderId + " validation passed - proceeding with retry");
-         
-         // 4. Update order status to "pending"
-         order.setStatus("pending");
-         order.setUpdatedAt(LocalDateTime.now());
-         order.setNotificationRead(false); // Reset notification so it appears as new
-         order = orderRepository.save(order);
-         
-         System.out.println("✅ Order #" + orderId + " status updated: failed → pending");
-         
-         // 5. Find existing payment record
-         Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
-         Payment payment;
-         
-         if (paymentOpt.isPresent()) {
-             // Update existing payment
-             payment = paymentOpt.get();
-             payment.setStatus("pending");
-             
-             System.out.println("✅ Found existing Payment #" + payment.getId() + " - updating status to pending");
-         } else {
-             // Create new payment record (shouldn't happen, but just in case)
-             payment = new Payment();
-             payment.setOrderId(orderId);
-             payment.setUserId(userId);
-             payment.setAmount(order.getAmount());
-             payment.setCurrency("USD");
-             payment.setPaymentMethod("KHQR");
-             payment.setStatus("pending");
-             payment.setCreatedAt(LocalDateTime.now());
-             
-             System.out.println("⚠️ No existing payment found - creating new Payment record");
-         }
-         
-         // 6. Generate new KHQR code
-         String billNumber = "ORDER-" + orderId + "-RETRY";
-         BakongKHQRService.KHQRGenerationResult khqrResult =
-                 bakongKHQRService.generateKHQR(billNumber, order.getAmount());
-         
-         if (!khqrResult.isSuccess()) {
-             System.err.println("❌ KHQR generation failed: " + khqrResult.getError());
-             result.put("success", false);
-             result.put("message", "Order status updated but KHQR generation failed: " + khqrResult.getError());
-             return result;
-         }
-         
-         System.out.println("✅ New KHQR generated - MD5: " + khqrResult.getMd5());
-         
-         // 7. Update payment with new KHQR details
-         payment.setKhqrMd5(khqrResult.getMd5());
-         payment.setKhqrQr(khqrResult.getQrCode());
-         payment.setExpiresAt(LocalDateTime.now().plusMinutes(5)); // 5 minutes timeout
-         payment = paymentRepository.save(payment);
-         
-         System.out.println("✅ Payment #" + payment.getId() + " updated with new KHQR");
-         System.out.println("   Expires at: " + payment.getExpiresAt());
-         
-         // 8. Start background monitoring
-         startPaymentMonitoring(payment.getId(), orderId);
-         
-         System.out.println("⏳ Payment monitoring started for Order #" + orderId);
-         
-         // 9. Prepare response data
-         Map<String, Object> orderData = new HashMap<>();
-         orderData.put("id", order.getId());
-         orderData.put("userId", order.getUserId());
-         orderData.put("status", order.getStatus());
-         orderData.put("amount", order.getAmount());
-         orderData.put("createdAt", order.getCreatedAt() != null ? order.getCreatedAt().toString() : null);
-         orderData.put("updatedAt", order.getUpdatedAt() != null ? order.getUpdatedAt().toString() : null);
-         orderData.put("addressId", order.getAddressId());
-         orderData.put("notificationRead", order.getNotificationRead());
-         
-         Map<String, Object> paymentData = new HashMap<>();
-         paymentData.put("id", payment.getId());
-         paymentData.put("orderId", payment.getOrderId());
-         paymentData.put("amount", payment.getAmount());
-         paymentData.put("currency", payment.getCurrency());
-         paymentData.put("paymentMethod", payment.getPaymentMethod());
-         paymentData.put("status", payment.getStatus());
-         paymentData.put("qrCode", payment.getKhqrQr());
-         paymentData.put("expiresAt", payment.getExpiresAt() != null ? payment.getExpiresAt().toString() : null);
-         
-         Map<String, Object> responseData = new HashMap<>();
-         responseData.put("order", orderData);
-         responseData.put("payment", paymentData);
-         responseData.put("qrCode", khqrResult.getQrCode());
-         
-         result.put("success", true);
-         result.put("message", "Order status updated to pending. Please scan the QR code to complete payment.");
-         result.put("data", responseData);
-         
-         System.out.println("✅ Retry payment successful for Order #" + orderId);
-         
-         return result;
-         
-     } catch (Exception e) {
-         System.err.println("❌ Error during retry payment for Order #" + orderId + ": " + e.getMessage());
-         e.printStackTrace();
-         result.put("success", false);
-         result.put("message", "Error retrying payment: " + e.getMessage());
-         return result;
-     }
- }
+
+    // ============================================================
+    // 🔄 RETRY PAYMENT FOR FAILED ORDER
+    // ============================================================
+    @Transactional
+    public Map<String, Object> retryPayment(Long orderId, Long userId) {
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            // 1. Find the order
+            Order order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new RuntimeException("Order not found with ID: " + orderId));
+
+            System.out.println("🔄 Found Order #" + orderId + " (status: " + order.getStatus() + ")");
+
+            // 2. Security check - verify user owns this order
+            if (!order.getUserId().equals(userId)) {
+                System.err.println("❌ Security: User #" + userId + " attempted to retry Order #" + orderId
+                        + " (owned by User #" + order.getUserId() + ")");
+                result.put("success", false);
+                result.put("message", "Access denied. You don't have permission to retry payment for this order.");
+                return result;
+            }
+
+            // 3. Validate order status is "failed"
+            if (!"failed".equalsIgnoreCase(order.getStatus())) {
+                System.err.println(
+                        "❌ Order #" + orderId + " is not in failed state (current: " + order.getStatus() + ")");
+                result.put("success", false);
+                result.put("message", "Only failed orders can be retried. Current status: " + order.getStatus());
+                return result;
+            }
+
+            System.out.println("✅ Order #" + orderId + " validation passed - proceeding with retry");
+
+            // 4. Update order status to "pending"
+            order.setStatus("pending");
+            order.setUpdatedAt(LocalDateTime.now());
+            order.setNotificationRead(false); // Reset notification so it appears as new
+            order = orderRepository.save(order);
+
+            System.out.println("✅ Order #" + orderId + " status updated: failed → pending");
+
+            // 5. Find existing payment record
+            Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
+            Payment payment;
+
+            if (paymentOpt.isPresent()) {
+                // Update existing payment
+                payment = paymentOpt.get();
+                payment.setStatus("pending");
+
+                System.out.println("✅ Found existing Payment #" + payment.getId() + " - updating status to pending");
+            } else {
+                // Create new payment record (shouldn't happen, but just in case)
+                payment = new Payment();
+                payment.setOrderId(orderId);
+                payment.setUserId(userId);
+                payment.setAmount(order.getAmount());
+                payment.setCurrency("USD");
+                payment.setPaymentMethod("KHQR");
+                payment.setStatus("pending");
+                payment.setCreatedAt(LocalDateTime.now());
+
+                System.out.println("⚠️ No existing payment found - creating new Payment record");
+            }
+
+            // 6. Generate new KHQR code
+            String billNumber = "ORDER-" + orderId + "-RETRY";
+            BakongKHQRService.KHQRGenerationResult khqrResult = bakongKHQRService.generateKHQR(billNumber,
+                    order.getAmount());
+
+            if (!khqrResult.isSuccess()) {
+                System.err.println("❌ KHQR generation failed: " + khqrResult.getError());
+                result.put("success", false);
+                result.put("message", "Order status updated but KHQR generation failed: " + khqrResult.getError());
+                return result;
+            }
+
+            System.out.println("✅ New KHQR generated - MD5: " + khqrResult.getMd5());
+
+            // 7. Update payment with new KHQR details
+            payment.setKhqrMd5(khqrResult.getMd5());
+            payment.setKhqrQr(khqrResult.getQrCode());
+            payment.setExpiresAt(LocalDateTime.now().plusMinutes(5)); // 5 minutes timeout
+            payment = paymentRepository.save(payment);
+
+            System.out.println("✅ Payment #" + payment.getId() + " updated with new KHQR");
+            System.out.println("   Expires at: " + payment.getExpiresAt());
+
+            // 8. Start background monitoring
+            startPaymentMonitoring(payment.getId(), orderId);
+
+            System.out.println("⏳ Payment monitoring started for Order #" + orderId);
+
+            // 9. Prepare response data
+            Map<String, Object> orderData = new HashMap<>();
+            orderData.put("id", order.getId());
+            orderData.put("userId", order.getUserId());
+            orderData.put("status", order.getStatus());
+            orderData.put("amount", order.getAmount());
+            orderData.put("createdAt", order.getCreatedAt() != null ? order.getCreatedAt().toString() : null);
+            orderData.put("updatedAt", order.getUpdatedAt() != null ? order.getUpdatedAt().toString() : null);
+            orderData.put("addressId", order.getAddressId());
+            orderData.put("notificationRead", order.getNotificationRead());
+
+            Map<String, Object> paymentData = new HashMap<>();
+            paymentData.put("id", payment.getId());
+            paymentData.put("orderId", payment.getOrderId());
+            paymentData.put("amount", payment.getAmount());
+            paymentData.put("currency", payment.getCurrency());
+            paymentData.put("paymentMethod", payment.getPaymentMethod());
+            paymentData.put("status", payment.getStatus());
+            paymentData.put("qrCode", payment.getKhqrQr());
+            paymentData.put("expiresAt", payment.getExpiresAt() != null ? payment.getExpiresAt().toString() : null);
+
+            Map<String, Object> responseData = new HashMap<>();
+            responseData.put("order", orderData);
+            responseData.put("payment", paymentData);
+            responseData.put("qrCode", khqrResult.getQrCode());
+
+            result.put("success", true);
+            result.put("message", "Order status updated to pending. Please scan the QR code to complete payment.");
+            result.put("data", responseData);
+
+            System.out.println("✅ Retry payment successful for Order #" + orderId);
+
+            return result;
+
+        } catch (Exception e) {
+            System.err.println("❌ Error during retry payment for Order #" + orderId + ": " + e.getMessage());
+            e.printStackTrace();
+            result.put("success", false);
+            result.put("message", "Error retrying payment: " + e.getMessage());
+            return result;
+        }
+    }
 }
