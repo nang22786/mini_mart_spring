@@ -160,7 +160,7 @@ public class OrderService {
             payment.setStatus("pending");
             payment.setKhqrMd5(khqrResult.getMd5());
             payment.setKhqrQr(khqrResult.getQrCode());
-            payment.setExpiresAt(LocalDateTime.now().plusMinutes(1));
+            payment.setExpiresAt(LocalDateTime.now().plusMinutes(5));
             payment.setCreatedAt(LocalDateTime.now());
             payment = paymentRepository.save(payment);
 
@@ -209,13 +209,22 @@ public class OrderService {
         try {
             System.out.println("🔍 Starting payment monitoring - Payment #" + paymentId);
 
-            // Check every 10 seconds for 5 minutes (30 checks)
-            for (int i = 0; i < 30; i++) {
-                Thread.sleep(10000); // Wait 10 seconds
+            // ✅ ADD INITIAL DELAY - Wait 30 seconds before first check
+            System.out.println("⏳ Waiting 30 seconds before first check...");
+            Thread.sleep(30000); // Wait 30 seconds FIRST
 
+            // Check every 30 seconds for 5 minutes (10 checks)
+            for (int i = 0; i < 10; i++) {
                 Payment payment = paymentRepository.findById(paymentId).orElse(null);
                 if (payment == null) {
                     System.err.println("❌ Payment not found: " + paymentId);
+                    return;
+                }
+
+                // Check if khqr_md5 exists
+                if (payment.getKhqrMd5() == null || payment.getKhqrMd5().isEmpty()) {
+                    System.err.println("❌ Cannot monitor - Payment #" + paymentId + " has NULL khqr_md5");
+                    updateOrderToFailed(orderId, paymentId);
                     return;
                 }
 
@@ -234,7 +243,7 @@ public class OrderService {
                 }
 
                 // Check payment status with Bakong API
-                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/30)");
+                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/10)");
 
                 boolean isPaid = checkBakongPayment(payment);
 
@@ -243,12 +252,21 @@ public class OrderService {
                     updateOrderToPaid(orderId, paymentId);
                     return;
                 }
+
+                // Wait 30 seconds before next check
+                if (i < 9) { // Don't sleep after last attempt
+                    System.out.println("⏳ Waiting 30 seconds before next check...");
+                    Thread.sleep(30000); // Wait 30 seconds between checks
+                }
             }
 
             // If we reach here, payment timed out
-            System.out.println("⏱️ Payment monitoring timeout (1 min) - Payment #" + paymentId);
+            System.out.println("⏱️ Payment monitoring timeout (5 min) - Payment #" + paymentId);
             updateOrderToFailed(orderId, paymentId);
 
+        } catch (InterruptedException e) {
+            System.err.println("❌ Monitoring interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             System.err.println("❌ Error monitoring payment: " + e.getMessage());
             e.printStackTrace();
