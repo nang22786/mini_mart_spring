@@ -210,8 +210,8 @@ public class OrderService {
             System.out.println("🔍 Starting payment monitoring - Payment #" + paymentId);
 
             // Check every 10 seconds for 5 minutes (30 checks)
-            for (int i = 0; i < 10; i++) {
-                Thread.sleep(30000); // Wait 30 seconds
+            for (int i = 0; i < 30; i++) {
+                Thread.sleep(10000); // Wait 10 seconds
 
                 Payment payment = paymentRepository.findById(paymentId).orElse(null);
                 if (payment == null) {
@@ -234,7 +234,7 @@ public class OrderService {
                 }
 
                 // Check payment status with Bakong API
-                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/10)");
+                System.out.println("🔍 Checking Bakong API - Payment #" + paymentId + " (attempt " + (i + 1) + "/30)");
 
                 boolean isPaid = checkBakongPayment(payment);
 
@@ -246,7 +246,7 @@ public class OrderService {
             }
 
             // If we reach here, payment timed out
-            System.out.println("⏱️ Payment monitoring timeout (5 min) - Payment #" + paymentId);
+            System.out.println("⏱️ Payment monitoring timeout (1 min) - Payment #" + paymentId);
             updateOrderToFailed(orderId, paymentId);
 
         } catch (Exception e) {
@@ -265,10 +265,6 @@ public class OrderService {
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Bearer " + bakongApiToken);
             headers.set("Content-Type", "application/json");
-            headers.set("User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            headers.set("Accept", "application/json");
-            headers.set("Accept-Language", "en-US,en;q=0.9");
 
             Map<String, String> body = new HashMap<>();
             body.put("md5", payment.getKhqrMd5());
@@ -276,11 +272,8 @@ public class OrderService {
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
             RestTemplate restTemplate = new RestTemplate();
-            ResponseEntity<BakongTransactionResponse> responseEntity = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    request,
-                    BakongTransactionResponse.class);
+            ResponseEntity<BakongTransactionResponse> responseEntity = restTemplate.exchange(url, HttpMethod.POST,
+                    request, BakongTransactionResponse.class);
 
             BakongTransactionResponse bakongResponse = responseEntity.getBody();
 
