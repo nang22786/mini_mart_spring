@@ -278,10 +278,13 @@ public class OrderService {
      */
     private boolean checkBakongPayment(Payment payment) {
         try {
-            String url = bakongApiBaseUrl + "/v1/check_transaction_by_md5";
+            // String url = bakongApiBaseUrl + "/v1/check_transaction_by_md5";
+            String url = "https://api-bakong.nbc.gov.kh/v1/check_transaction_by_md5";
 
             HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", "Bearer " + bakongApiToken);
+            // headers.set("Authorization", "Bearer " + bakongApiToken);
+            headers.set("Authorization",
+                    "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjp7ImlkIjoiODJlODk4NDcxMjU5NDFhNSJ9LCJpYXQiOjE3NjEzMTA5ODAsImV4cCI6MTc2OTA4Njk4MH0.j4A8jvYII8niPGTamo31_pyf-Qu_H_SzV0mWobXeKR0");
             headers.set("Content-Type", "application/json");
 
             Map<String, String> body = new HashMap<>();
