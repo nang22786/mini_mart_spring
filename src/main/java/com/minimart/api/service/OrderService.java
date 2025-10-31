@@ -885,7 +885,7 @@ public class OrderService {
             System.out.println("   Expires at: " + payment.getExpiresAt());
 
             // 8. Start background monitoring
-            startPaymentMonitoring(payment.getId(), orderId);
+            // startPaymentMonitoring(payment.getId(), orderId);
 
             System.out.println("⏳ Payment monitoring started for Order #" + orderId);
 
